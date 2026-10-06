@@ -3,6 +3,7 @@ package be.cameratv.controller
 import be.cameratv.model.AppModel
 import be.cameratv.model.AppState
 import be.cameratv.model.Camera
+import be.cameratv.model.MqttConfig
 import be.cameratv.model.NvrConfig
 import be.cameratv.model.PtzDirection
 import be.cameratv.model.Screen
@@ -96,6 +97,16 @@ class AppController(
             Screen.Loading -> false
         }
     }
+
+    // STUB : implémentation à venir (MVP 3).
+    /** Commande de la domotique ; true si elle a été appliquée. */
+    fun onExternalCommand(command: ExternalCommand): Boolean = TODO()
+
+    /** Enregistre la configuration MQTT (null = désactivé) et la place dans l'état. */
+    fun updateMqtt(config: MqttConfig?): Unit = TODO()
+
+    /** La vue a mis l'application en arrière-plan suite à [AppState.exitRequested]. */
+    fun onExitHandled(): Unit = TODO()
 
     /** Relâchement d'une touche dont l'appui a été consommé : arrête un mouvement PTZ en cours. */
     fun onCommandReleased(command: RemoteCommand) {

@@ -18,6 +18,11 @@ data class AppState(
     /** Plein écran uniquement : les touches pilotent la caméra motorisée au lieu de changer de caméra. */
     val ptzMode: Boolean = false,
     val error: String? = null,
+    /** Pilotage par la domotique ; null = désactivé. */
+    val mqtt: MqttConfig? = null,
+    val mqttConnected: Boolean = false,
+    /** Demande de passage en arrière-plan (commande externe) ; la vue l'exécute puis acquitte. */
+    val exitRequested: Boolean = false,
 ) {
     /** Colonnes de la grille : 1 caméra = 1, jusqu'à 4 = 2, au-delà = 3 (8 canaux max). */
     val gridColumns: Int

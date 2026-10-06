@@ -1,6 +1,7 @@
 package be.cameratv.controller
 
 import be.cameratv.model.Camera
+import be.cameratv.model.MqttConfig
 import be.cameratv.model.NvrConfig
 import be.cameratv.model.PtzDirection
 import be.cameratv.model.SettingsRepository
@@ -17,6 +18,12 @@ class FakeSettings(var stored: NvrConfig? = null) : SettingsRepository {
     }
     override suspend fun clear() {
         stored = null
+    }
+
+    var storedMqtt: MqttConfig? = null
+    override suspend fun loadMqtt(): MqttConfig? = storedMqtt
+    override suspend fun saveMqtt(config: MqttConfig?) {
+        storedMqtt = config
     }
 }
 

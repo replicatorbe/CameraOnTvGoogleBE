@@ -56,4 +56,8 @@ class DataStoreSettingsRepository internal constructor(
         val HTTP_PORT = intPreferencesKey("http_port")
         val RTSP_PORT = intPreferencesKey("rtsp_port")
     }
+
+    // STUB : implémentation à venir.
+    override suspend fun loadMqtt(): MqttConfig? = TODO()
+    override suspend fun saveMqtt(config: MqttConfig?): Unit = TODO()
 }
