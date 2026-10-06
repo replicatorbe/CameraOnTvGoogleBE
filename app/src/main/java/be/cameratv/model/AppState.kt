@@ -15,6 +15,8 @@ data class AppState(
     val cameras: List<Camera> = emptyList(),
     /** Index (dans [cameras]) de la tuile qui a le focus dans la grille. */
     val focusedIndex: Int = 0,
+    /** Plein écran uniquement : les touches pilotent la caméra motorisée au lieu de changer de caméra. */
+    val ptzMode: Boolean = false,
     val error: String? = null,
 ) {
     /** Colonnes de la grille : 1 caméra = 1, jusqu'à 4 = 2, au-delà = 3 (8 canaux max). */

@@ -74,6 +74,11 @@ class AppController(
         }
     }
 
+    /** Relâchement d'une touche dont l'appui a été consommé : arrête un mouvement PTZ en cours. */
+    fun onCommandReleased(command: RemoteCommand) {
+        // Implémenté avec le mode PTZ.
+    }
+
     fun streamUrl(camera: Camera, quality: StreamQuality): String? =
         driver?.streamUrl(camera, quality)
 
