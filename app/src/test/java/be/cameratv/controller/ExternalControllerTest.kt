@@ -41,7 +41,7 @@ class ExternalControllerTest {
     private fun online(base: String, value: Boolean) = BusMessage("$base/online", value.toString(), retained = true)
 
     private val gridState =
-        """{"screen":"grid","camera":null,"cameraName":null,"ptzMode":false,"visible":false,""" +
+        """{"screen":"grid","camera":null,"cameraName":null,"ptzMode":false,"visible":false,"screenOn":true,""" +
             """"cameras":[{"channel":1,"name":"Porte","ptz":false},{"channel":2,"name":"OUESTPTZ","ptz":true}]}"""
 
     @Test
@@ -112,7 +112,7 @@ class ExternalControllerTest {
         assertEquals(
             BusMessage(
                 "cameratv/state",
-                """{"screen":"fullscreen","camera":2,"cameraName":"OUESTPTZ","ptzMode":true,"visible":false,""" +
+                """{"screen":"fullscreen","camera":2,"cameraName":"OUESTPTZ","ptzMode":true,"visible":false,"screenOn":true,""" +
                     """"cameras":[{"channel":1,"name":"Porte","ptz":false},{"channel":2,"name":"OUESTPTZ","ptz":true}]}""",
                 retained = true,
             ),
@@ -254,5 +254,18 @@ class ExternalControllerTest {
         val disabled = setup(mqttConfig = null)
         disabled.external.onNetworkMaybeRestored()
         assertEquals(0, disabled.bus.reconnects)
+    }
+
+    @Test
+    fun `mise en veille de la TV publiée dans l'état`() = runTest {
+        val s = setup()
+        s.external.start()
+        s.bus.connect()
+        runCurrent()
+        s.app.onScreenChanged(false)
+        runCurrent()
+        val last = s.bus.published.last { it.topic == "cameratv/state" }
+        assertTrue(last.payload.contains("\"screenOn\":false"))
+        assertTrue(last.retained)
     }
 }

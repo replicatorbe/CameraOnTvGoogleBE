@@ -13,6 +13,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -25,10 +26,15 @@ class CameraTvService : Service() {
 
     private val app get() = application as CameraTvApp
 
-    /** Sortie de veille : l'écran se rallume, la connexion MQTT d'avant la veille est morte. */
-    private val screenOnReceiver = object : BroadcastReceiver() {
+    /**
+     * Entrée et sortie de veille : l'état de l'écran est publié, et au rallumage la connexion MQTT
+     * est renouvelée par sécurité.
+     */
+    private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            app.externalController.onNetworkMaybeRestored()
+            val on = intent.action == Intent.ACTION_SCREEN_ON
+            app.controller.onScreenChanged(on)
+            if (on) app.externalController.onNetworkMaybeRestored()
         }
     }
 
@@ -57,14 +63,21 @@ class CameraTvService : Service() {
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), type)
         app.externalController.start()
-        registerReceiver(screenOnReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
+        app.controller.onScreenChanged(getSystemService(PowerManager::class.java).isInteractive)
+        registerReceiver(
+            screenReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_SCREEN_OFF)
+            },
+        )
         getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
-        unregisterReceiver(screenOnReceiver)
+        unregisterReceiver(screenReceiver)
         getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         app.externalController.stop()
         super.onDestroy()

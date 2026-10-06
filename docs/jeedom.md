@@ -59,7 +59,7 @@ Si l'utilisateur touche la télécommande pendant un affichage temporaire (`dura
 - `true` quand l'application est connectée, y compris TV en veille ;
 - `false` à l'arrêt du service ou en cas de coupure réseau. C'est aussi le message de dernière volonté MQTT, que le broker publie lui-même si la connexion est perdue.
 
-`online` n'indique donc pas si la TV est allumée : utiliser pour cela l'état de l'équipement Jeedom de la TV.
+`online` n'indique donc pas si la TV est allumée : c'est le rôle du champ `screenOn` de `cameratv/state`.
 
 `cameratv/state` (retenu) :
 
@@ -70,6 +70,7 @@ Si l'utilisateur touche la télécommande pendant un affichage temporaire (`dura
   "cameraName": "OUESTPTZ",
   "ptzMode": false,
   "visible": true,
+  "screenOn": true,
   "cameras": [{"channel": 1, "name": "OUESTTERRASSE", "ptz": true}]
 }
 ```
@@ -78,7 +79,8 @@ Champs :
 
 - `screen` : `setup`, `loading`, `grid` ou `fullscreen` ;
 - `camera` et `cameraName` : `null` hors plein écran ;
-- `visible` : `false` quand la TV affiche une autre application.
+- `visible` : `false` quand la TV affiche une autre application ;
+- `screenOn` : `false` quand la TV est en veille.
 
 ## Équipement Jeedom (plugin jMQTT ou MQTT Manager)
 
@@ -100,6 +102,7 @@ Créer un équipement « Caméras TV » rattaché au broker, avec :
 | En ligne | `cameratv/online` | binaire |
 | Écran | `cameratv/state` | champ JSON `screen` |
 | Caméra affichée | `cameratv/state` | champ JSON `cameraName` |
+| Écran allumé | `cameratv/state` | champ JSON `screenOn` (binaire) |
 
 ## Ouvrir l'application depuis Jeedom
 
@@ -122,5 +125,5 @@ adb shell am start -a android.intent.action.VIEW -d "cameratv://show?camera=INTE
 
 Scénario type « on sonne » :
 
-1. Si la TV est éteinte, d'après l'état de son équipement Jeedom : l'allumer, puis attendre 3 secondes.
+1. Si la TV est en veille (`screenOn` à `false`) : l'allumer depuis Jeedom, puis attendre que `screenOn` repasse à `true` (environ 2 s).
 2. Publier `{"camera": "INTERCOM", "duration": 30}` sur `cameratv/cmd/show`.

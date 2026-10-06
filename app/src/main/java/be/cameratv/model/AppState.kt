@@ -27,6 +27,8 @@ data class AppState(
     val uiVisible: Boolean = false,
     /** Une commande externe veut afficher l'application alors qu'elle est en arrière-plan. */
     val foregroundRequested: Boolean = false,
+    /** Écran de la TV allumé (false : TV en veille). */
+    val screenOn: Boolean = true,
 ) {
     /** Colonnes de la grille : 1 caméra = 1, jusqu'à 4 = 2, au-delà = 3 (8 canaux max). */
     val gridColumns: Int

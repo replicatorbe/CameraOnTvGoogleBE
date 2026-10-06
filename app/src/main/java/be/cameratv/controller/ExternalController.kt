@@ -121,6 +121,7 @@ class ExternalController(
             cameraName = fullscreen?.let { screen -> state.cameras.firstOrNull { it.channel == screen.channel }?.name },
             ptzMode = state.ptzMode,
             visible = state.uiVisible,
+            screenOn = state.screenOn,
             cameras = state.cameras.map { CameraSnapshot(it.channel, it.name, it.ptz) },
         )
     }
@@ -134,6 +135,8 @@ class ExternalController(
         val ptzMode: Boolean,
         /** false : la TV affiche une autre application, la caméra n'est pas à l'écran. */
         val visible: Boolean,
+        /** false : TV en veille (la connexion MQTT, elle, reste ouverte). */
+        val screenOn: Boolean,
         val cameras: List<CameraSnapshot>,
     )
 

@@ -154,6 +154,11 @@ class AppController(
         model.update { it.copy(exitRequested = false) }
     }
 
+    /** La TV allume ou éteint son écran (sortie ou entrée en veille). */
+    fun onScreenChanged(on: Boolean) {
+        model.update { it.copy(screenOn = on) }
+    }
+
     /** L'écran de l'application devient visible ou passe derrière une autre application. */
     fun onUiVisibilityChanged(visible: Boolean) {
         model.update {
