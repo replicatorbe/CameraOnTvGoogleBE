@@ -4,6 +4,7 @@ import be.cameratv.model.AppModel
 import be.cameratv.model.AppState
 import be.cameratv.model.Camera
 import be.cameratv.model.NvrConfig
+import be.cameratv.model.PtzDirection
 import be.cameratv.model.Screen
 import be.cameratv.model.SettingsRepository
 import be.cameratv.model.StreamQuality
@@ -15,6 +16,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -38,10 +40,25 @@ class AppController(
     /** Chargement ou connexion en cours ; annulé si une nouvelle connexion est demandée. */
     private var connectJob: Job? = null
 
+    // État du mouvement PTZ. Lu et modifié uniquement depuis le thread principal
+    // (onCommand, onCommandReleased et le minuteur de sécurité, lancé dans [scope]).
+
+    /** Direction en cours de mouvement, ou null si la caméra est immobile. */
+    private var movingDirection: PtzDirection? = null
+
+    /** Caméra qui bouge : c'est elle qu'il faut arrêter, même si l'écran a changé entre-temps. */
+    private var movingCamera: Camera? = null
+
+    /** Arrête le mouvement si aucun appui (ou répétition) n'arrive à temps : protège d'un relâchement perdu. */
+    private var safetyTimer: Job? = null
+
+    /** Dernier ordre PTZ confié au pilote ; chaque nouvel ordre attend la fin du précédent. */
+    private var lastPtzOrder: Job? = null
+
     /** Au lancement : configuration enregistrée → connexion, sinon écran de configuration. */
     fun start() {
         launchExclusive {
-            model.update { it.copy(screen = Screen.Loading, error = null) }
+            model.update { it.copy(screen = Screen.Loading, ptzMode = false, error = null) }
             val config = try {
                 settings.load()
             } catch (e: CancellationException) {
@@ -76,7 +93,8 @@ class AppController(
 
     /** Relâchement d'une touche dont l'appui a été consommé : arrête un mouvement PTZ en cours. */
     fun onCommandReleased(command: RemoteCommand) {
-        // Implémenté avec le mode PTZ.
+        val direction = ptzDirectionOf(command) ?: return
+        if (direction == movingDirection) stopMovement()
     }
 
     fun streamUrl(camera: Camera, quality: StreamQuality): String? =
@@ -102,12 +120,13 @@ class AppController(
 
     /** Annule le travail en cours puis lance [block] : une seule connexion à la fois. */
     private fun launchExclusive(block: suspend CoroutineScope.() -> Unit) {
+        stopMovement() // Avec l'ancien pilote, avant qu'il ne soit remplacé.
         connectJob?.cancel()
         connectJob = scope.launch(block = block)
     }
 
     private suspend fun connectNow(config: NvrConfig) {
-        model.update { it.copy(screen = Screen.Loading, config = config, error = null) }
+        model.update { it.copy(screen = Screen.Loading, config = config, ptzMode = false, error = null) }
         try {
             val newDriver = driverFactory.create(config)
             val cameras = newDriver.listCameras()
@@ -123,6 +142,7 @@ class AppController(
                     screen = Screen.Grid,
                     cameras = cameras,
                     focusedIndex = it.focusedIndex.coerceIn(0, cameras.lastIndex),
+                    ptzMode = false,
                     error = null,
                 )
             }
@@ -150,7 +170,7 @@ class AppController(
     }
 
     private fun showSetupError(message: String) {
-        model.update { it.copy(screen = Screen.Setup, error = message) }
+        model.update { it.copy(screen = Screen.Setup, ptzMode = false, error = message) }
     }
 
     // --- Commandes par écran -----------------------------------------------------------------
@@ -178,16 +198,37 @@ class AppController(
     private fun onFullscreenCommand(command: RemoteCommand, current: AppState, channel: Int): Boolean {
         val cameras = current.cameras
         val index = cameras.indexOfFirst { it.channel == channel }.coerceAtLeast(0)
+        val camera = cameras.getOrNull(index)
+        if (current.ptzMode && camera != null) {
+            onPtzCommand(command, camera)
+            return true
+        }
         when (command) {
             RemoteCommand.Right, RemoteCommand.ChannelUp -> showFullscreen(wrap(index + 1, cameras.size))
             RemoteCommand.Left, RemoteCommand.ChannelDown -> showFullscreen(wrap(index - 1, cameras.size))
             is RemoteCommand.Digit -> digitIndex(command, cameras.size)?.let { showFullscreen(it) }
-            RemoteCommand.Back -> model.update { it.copy(screen = Screen.Grid, focusedIndex = index) }
-            // Réservées au mode PTZ (jalon suivant) : consommées pour l'instant, sans effet.
-            RemoteCommand.Up, RemoteCommand.Down, RemoteCommand.Ok -> Unit
+            RemoteCommand.Back -> showGrid(index)
+            RemoteCommand.Ok -> if (camera?.ptz == true) model.update { it.copy(ptzMode = true) }
+            // Haut et bas ne servent qu'en mode PTZ : consommées, sans effet.
+            RemoteCommand.Up, RemoteCommand.Down -> Unit
             RemoteCommand.Menu -> showSetup()
         }
         return true
+    }
+
+    /** Mode PTZ : flèches et CH+/CH- pilotent la caméra, les chiffres rappellent un préréglage. */
+    private fun onPtzCommand(command: RemoteCommand, camera: Camera) {
+        val direction = ptzDirectionOf(command)
+        if (direction != null) {
+            pressDirection(camera, direction)
+            return
+        }
+        when (command) {
+            is RemoteCommand.Digit -> if (command.value in 1..9) gotoPreset(camera, command.value)
+            RemoteCommand.Ok, RemoteCommand.Back -> leavePtzMode()
+            RemoteCommand.Menu -> showSetup()
+            else -> Unit
+        }
     }
 
     /** Le formulaire Compose gère lui-même focus et saisie ; seul Retour nous intéresse. */
@@ -204,14 +245,21 @@ class AppController(
 
     /** Affiche la caméra d'index [index] en plein écran et y aligne le focus de la grille. */
     private fun showFullscreen(index: Int) {
+        stopMovement()
         model.update {
             val camera = it.cameras.getOrNull(index) ?: return@update it
-            it.copy(screen = Screen.Fullscreen(camera.channel), focusedIndex = index)
+            it.copy(screen = Screen.Fullscreen(camera.channel), focusedIndex = index, ptzMode = false)
         }
     }
 
+    private fun showGrid(focusedIndex: Int) {
+        stopMovement()
+        model.update { it.copy(screen = Screen.Grid, focusedIndex = focusedIndex, ptzMode = false) }
+    }
+
     private fun showSetup() {
-        model.update { it.copy(screen = Screen.Setup, error = null) }
+        stopMovement()
+        model.update { it.copy(screen = Screen.Setup, ptzMode = false, error = null) }
     }
 
     /** Touche 1 → index 0, etc. Null si aucune caméra ne correspond. */
@@ -220,7 +268,87 @@ class AppController(
 
     private fun wrap(index: Int, size: Int): Int = if (size == 0) 0 else Math.floorMod(index, size)
 
+    // --- PTZ -----------------------------------------------------------------------------------
+
+    private fun ptzDirectionOf(command: RemoteCommand): PtzDirection? = when (command) {
+        RemoteCommand.Up -> PtzDirection.UP
+        RemoteCommand.Down -> PtzDirection.DOWN
+        RemoteCommand.Left -> PtzDirection.LEFT
+        RemoteCommand.Right -> PtzDirection.RIGHT
+        RemoteCommand.ChannelUp -> PtzDirection.ZOOM_IN
+        RemoteCommand.ChannelDown -> PtzDirection.ZOOM_OUT
+        else -> null
+    }
+
+    /**
+     * Appui (ou répétition automatique) sur une direction. Le premier appui démarre le mouvement ;
+     * les répétitions de la même touche ne font que relancer le minuteur de sécurité.
+     */
+    private fun pressDirection(camera: Camera, direction: PtzDirection) {
+        if (direction != movingDirection || camera != movingCamera) {
+            stopMovement()
+            movingDirection = direction
+            movingCamera = camera
+            sendPtzOrder { it.ptzStart(camera, direction) }
+        }
+        restartSafetyTimer()
+    }
+
+    /** Arrête le mouvement en cours, s'il y en a un. Sans effet sinon. */
+    private fun stopMovement() {
+        val direction = movingDirection ?: return
+        val camera = movingCamera ?: return
+        safetyTimer?.cancel()
+        safetyTimer = null
+        movingDirection = null
+        movingCamera = null
+        sendPtzOrder { it.ptzStop(camera, direction) }
+    }
+
+    private fun restartSafetyTimer() {
+        safetyTimer?.cancel()
+        safetyTimer = scope.launch {
+            delay(PTZ_SAFETY_TIMEOUT_MS)
+            safetyTimer = null
+            stopMovement()
+        }
+    }
+
+    private fun gotoPreset(camera: Camera, preset: Int) {
+        stopMovement()
+        sendPtzOrder { it.gotoPreset(camera, preset) }
+    }
+
+    /** Quitte le mode PTZ en restant sur la même caméra en plein écran. */
+    private fun leavePtzMode() {
+        stopMovement()
+        model.update { it.copy(ptzMode = false) }
+    }
+
+    /**
+     * Confie un ordre au pilote, strictement après les ordres précédents : chaque ordre attend
+     * la fin du précédent, un arrêt ne peut donc jamais doubler son démarrage. Le pilote est celui
+     * du moment de l'appui. Une erreur du NVR est ignorée et ne bloque pas les ordres suivants.
+     */
+    private fun sendPtzOrder(order: suspend (CameraDriver) -> Unit) {
+        val target = driver ?: return
+        val previous = lastPtzOrder
+        lastPtzOrder = scope.launch {
+            previous?.join()
+            try {
+                order(target)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // NVR injoignable ou commande refusée : rien à afficher, l'appui suivant réessaiera.
+            }
+        }
+    }
+
     private companion object {
         const val GENERIC_ERROR = "Connexion au NVR impossible"
+
+        /** Couvre le délai avant la première répétition d'une touche maintenue (~500 ms). */
+        const val PTZ_SAFETY_TIMEOUT_MS = 800L
     }
 }

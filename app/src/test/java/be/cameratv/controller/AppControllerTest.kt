@@ -19,8 +19,11 @@ import be.cameratv.model.StreamQuality
 import be.cameratv.model.driver.AuthenticationException
 import be.cameratv.model.driver.CameraDriverException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -353,6 +356,262 @@ class AppControllerTest {
         assertEquals(Screen.Setup, c.state.value.screen)
         assertTrue(c.onCommand(Back))
         assertEquals(Screen.Grid, c.state.value.screen)
+    }
+
+    // --- Mode PTZ ------------------------------------------------------------------------------
+
+    private val ptzCameras = listOf(
+        Camera(1, "Dôme", ptz = true),
+        Camera(2, "Fixe"),
+        Camera(3, "Dôme jardin", ptz = true),
+    )
+
+    /** Connecté au NVR factice, en plein écran sur la caméra 1, mode PTZ actif. */
+    private fun TestScope.ptzController(factory: FakeDriverFactory = FakeDriverFactory { ptzCameras }): AppController {
+        val c = controller(settings = FakeSettings(stored = config), factory = factory)
+        c.start()
+        advanceUntilIdle()
+        c.onCommand(Digit(1))
+        assertTrue(c.onCommand(Ok))
+        assertTrue(c.state.value.ptzMode)
+        return c
+    }
+
+    @Test
+    fun `Ok active le mode PTZ uniquement sur une caméra motorisée`() = runTest {
+        val c = controller(initial = AppState(screen = Screen.Fullscreen(2), cameras = ptzCameras, focusedIndex = 1))
+        assertTrue(c.onCommand(Ok))
+        assertFalse(c.state.value.ptzMode)
+        assertEquals(Screen.Fullscreen(2), c.state.value.screen)
+
+        c.onCommand(Right)
+        assertEquals(Screen.Fullscreen(3), c.state.value.screen)
+        assertTrue(c.onCommand(Ok))
+        assertTrue(c.state.value.ptzMode)
+        assertEquals(Screen.Fullscreen(3), c.state.value.screen)
+    }
+
+    @Test
+    fun `haut et bas hors mode PTZ sont consommés sans effet sur une caméra motorisée`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = controller(settings = FakeSettings(stored = config), factory = factory)
+        c.start()
+        advanceUntilIdle()
+        c.onCommand(Digit(1))
+        assertTrue(c.onCommand(Up))
+        assertTrue(c.onCommand(Down))
+        advanceUntilIdle()
+        assertFalse(c.state.value.ptzMode)
+        assertEquals(Screen.Fullscreen(1), c.state.value.screen)
+        assertTrue(factory.ptzCalls.isEmpty())
+    }
+
+    @Test
+    fun `appui sur une flèche démarre le mouvement, relâchement l'arrête`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        assertTrue(c.onCommand(Left))
+        runCurrent()
+        assertEquals(listOf("start:1:LEFT"), factory.ptzCalls)
+        assertEquals(Screen.Fullscreen(1), c.state.value.screen) // Gauche ne change plus de caméra.
+
+        c.onCommandReleased(Left)
+        runCurrent()
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
+        assertTrue(c.state.value.ptzMode)
+
+        advanceUntilIdle() // Le minuteur de sécurité ne renvoie pas d'arrêt.
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `les répétitions d'une touche maintenue ne relancent ni ne coupent le mouvement`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Up)
+        advanceTimeBy(500) // Délai avant la première répétition.
+        repeat(40) { // 2 s de répétitions toutes les 50 ms.
+            assertTrue(c.onCommand(Up))
+            advanceTimeBy(50)
+        }
+        assertEquals(listOf("start:1:UP"), factory.ptzCalls)
+
+        c.onCommandReleased(Up)
+        advanceUntilIdle()
+        assertEquals(listOf("start:1:UP", "stop:1:UP"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `relâchement perdu, arrêt automatique après 800 ms`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Right)
+        advanceTimeBy(799)
+        assertEquals(listOf("start:1:RIGHT"), factory.ptzCalls)
+        advanceTimeBy(2)
+        assertEquals(listOf("start:1:RIGHT", "stop:1:RIGHT"), factory.ptzCalls)
+
+        // Le relâchement tardif est ignoré, l'appui suivant redémarre normalement.
+        c.onCommandReleased(Right)
+        c.onCommand(Right)
+        runCurrent()
+        assertEquals(listOf("start:1:RIGHT", "stop:1:RIGHT", "start:1:RIGHT"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `le relâchement d'une autre touche est ignoré`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        c.onCommandReleased(Up)
+        c.onCommandReleased(Ok)
+        c.onCommandReleased(Digit(3))
+        advanceTimeBy(100)
+        assertEquals(listOf("start:1:LEFT"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `changer de direction arrête d'abord la précédente`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        c.onCommand(Up)
+        c.onCommandReleased(Left) // Déjà arrêtée : ignoré.
+        runCurrent()
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT", "start:1:UP"), factory.ptzCalls)
+        c.onCommandReleased(Up)
+        advanceUntilIdle()
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT", "start:1:UP", "stop:1:UP"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `CH plus et CH moins zooment sans changer de caméra`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        assertTrue(c.onCommand(ChannelUp))
+        c.onCommandReleased(ChannelUp)
+        assertTrue(c.onCommand(ChannelDown))
+        c.onCommandReleased(ChannelDown)
+        advanceUntilIdle()
+        assertEquals(
+            listOf("start:1:ZOOM_IN", "stop:1:ZOOM_IN", "start:1:ZOOM_OUT", "stop:1:ZOOM_OUT"),
+            factory.ptzCalls,
+        )
+        assertEquals(Screen.Fullscreen(1), c.state.value.screen)
+    }
+
+    @Test
+    fun `un chiffre rappelle le préréglage après avoir arrêté le mouvement`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        assertTrue(c.onCommand(Digit(3)))
+        c.onCommand(Down)
+        assertTrue(c.onCommand(Digit(9)))
+        assertTrue(c.onCommand(Digit(0))) // Pas de préréglage 0 : consommé, sans effet.
+        advanceUntilIdle()
+        assertEquals(listOf("preset:1:3", "start:1:DOWN", "stop:1:DOWN", "preset:1:9"), factory.ptzCalls)
+        assertEquals(Screen.Fullscreen(1), c.state.value.screen)
+        assertTrue(c.state.value.ptzMode)
+    }
+
+    @Test
+    fun `Ok quitte le mode PTZ en arrêtant le mouvement et reste en plein écran`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        assertTrue(c.onCommand(Ok))
+        runCurrent()
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
+        assertFalse(c.state.value.ptzMode)
+        assertEquals(Screen.Fullscreen(1), c.state.value.screen)
+
+        // Hors mode PTZ, Droite change à nouveau de caméra.
+        c.onCommand(Right)
+        assertEquals(Screen.Fullscreen(2), c.state.value.screen)
+    }
+
+    @Test
+    fun `Back quitte le mode PTZ puis un second Back revient à la grille`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Up)
+        assertTrue(c.onCommand(Back))
+        runCurrent()
+        assertEquals(listOf("start:1:UP", "stop:1:UP"), factory.ptzCalls)
+        assertFalse(c.state.value.ptzMode)
+        assertEquals(Screen.Fullscreen(1), c.state.value.screen)
+
+        assertTrue(c.onCommand(Back))
+        assertEquals(Screen.Grid, c.state.value.screen)
+        assertEquals(0, c.state.value.focusedIndex)
+        advanceUntilIdle()
+        assertEquals(listOf("start:1:UP", "stop:1:UP"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `Menu en mode PTZ arrête le mouvement et ouvre Setup`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Right)
+        assertTrue(c.onCommand(Menu))
+        advanceUntilIdle()
+        assertEquals(listOf("start:1:RIGHT", "stop:1:RIGHT"), factory.ptzCalls)
+        assertEquals(Screen.Setup, c.state.value.screen)
+        assertFalse(c.state.value.ptzMode)
+
+        c.onCommand(Back)
+        assertEquals(Screen.Grid, c.state.value.screen)
+        assertFalse(c.state.value.ptzMode)
+    }
+
+    @Test
+    fun `une reconnexion arrête le mouvement et quitte le mode PTZ`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Down)
+        c.retry()
+        advanceUntilIdle()
+        assertEquals(listOf("start:1:DOWN", "stop:1:DOWN"), factory.ptzCalls)
+        assertEquals(Screen.Grid, c.state.value.screen)
+        assertFalse(c.state.value.ptzMode)
+    }
+
+    @Test
+    fun `une erreur du pilote au démarrage ne bloque pas les ordres suivants`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        var failures = 1
+        factory.onPtzStart = { _, _ ->
+            if (failures-- > 0) throw CameraDriverException("NVR injoignable")
+        }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        c.onCommandReleased(Left)
+        c.onCommand(Left)
+        advanceTimeBy(100)
+        assertEquals(listOf("stop:1:LEFT", "start:1:LEFT"), factory.ptzCalls)
+        c.onCommandReleased(Left)
+        advanceUntilIdle()
+        assertEquals(listOf("stop:1:LEFT", "start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
+        assertTrue(c.state.value.ptzMode)
+    }
+
+    @Test
+    fun `un pilote lent ne laisse jamais un arrêt doubler son démarrage`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        factory.onPtzStart = { _, _ -> delay(300) }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        c.onCommandReleased(Left)
+        c.onCommand(ChannelUp)
+        c.onCommandReleased(ChannelUp)
+        c.onCommand(Digit(2))
+        advanceTimeBy(100)
+        assertTrue(factory.ptzCalls.isEmpty()) // Le premier démarrage est encore en cours.
+        advanceUntilIdle()
+        assertEquals(
+            listOf("start:1:LEFT", "stop:1:LEFT", "start:1:ZOOM_IN", "stop:1:ZOOM_IN", "preset:1:2"),
+            factory.ptzCalls,
+        )
     }
 
     // --- Snapshots -----------------------------------------------------------------------------

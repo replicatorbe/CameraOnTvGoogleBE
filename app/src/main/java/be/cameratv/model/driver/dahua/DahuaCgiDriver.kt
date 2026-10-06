@@ -47,7 +47,17 @@ class DahuaCgiDriver internal constructor(
         }
         // Aucune caméra « Connected » : format de réponse probablement non reconnu, on ne filtre pas.
         val filtered = if (connected == null) cameras else cameras.filter { it.channel in connected }
-        return filtered.ifEmpty { cameras }
+        val listed = filtered.ifEmpty { cameras }
+        val ptzChannels = try {
+            DahuaResponseParser.parsePtzChannels(
+                get("cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice").decodeToString()
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emptySet() // liste des équipements indisponible : aucune caméra considérée motorisée
+        }
+        return listed.map { it.copy(ptz = it.channel in ptzChannels) }
     }
 
     override fun streamUrl(camera: Camera, quality: StreamQuality): String {

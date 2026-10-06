@@ -174,6 +174,7 @@ class DahuaCgiDriverTest {
                     "states[2].channel=2\r\nstates[2].connectionState=Connected\r\n"
             )
         )
+        server.enqueue(badRequest())
 
         assertEquals(listOf(Camera(1, "Porte"), Camera(3, "Caméra 3")), driver().listCameras())
         assertEquals(
@@ -184,6 +185,10 @@ class DahuaCgiDriverTest {
             "/cgi-bin/LogicDeviceManager.cgi?action=getCameraState&uniqueChannels[0]=-1",
             server.takeRequest().path,
         )
+        assertEquals(
+            "/cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice",
+            server.takeRequest().path,
+        )
     }
 
     @Test
@@ -191,7 +196,8 @@ class DahuaCgiDriverTest {
         server.enqueue(
             MockResponse().setBody("table.ChannelTitle[1].Name=Garage\ntable.ChannelTitle[0].Name=Porte\n")
         )
-        server.enqueue(MockResponse().setResponseCode(400).setBody("Error\r\nBad Request!\r\n"))
+        server.enqueue(badRequest())
+        server.enqueue(badRequest())
 
         assertEquals(listOf(Camera(1, "Porte"), Camera(2, "Garage")), driver().listCameras())
     }
@@ -200,6 +206,7 @@ class DahuaCgiDriverTest {
     fun `liste complete si getCameraState illisible`() = runBlocking {
         server.enqueue(MockResponse().setBody("table.ChannelTitle[0].Name=Porte\n"))
         server.enqueue(MockResponse().setBody("something=else\n"))
+        server.enqueue(badRequest())
 
         assertEquals(listOf(Camera(1, "Porte")), driver().listCameras())
     }
@@ -208,9 +215,76 @@ class DahuaCgiDriverTest {
     fun `liste complete si aucune camera ne semble connectee`() = runBlocking {
         server.enqueue(MockResponse().setBody("table.ChannelTitle[0].Name=Porte\n"))
         server.enqueue(MockResponse().setBody("states[0].channel=0\nstates[0].connectionState=Unknown\n"))
+        server.enqueue(badRequest())
 
         assertEquals(listOf(Camera(1, "Porte")), driver().listCameras())
     }
+
+    private val titlesAndStates = listOf(
+        "table.ChannelTitle[0].Name=Allée\ntable.ChannelTitle[3].Name=Porte\n" +
+            "table.ChannelTitle[4].Name=Parking\ntable.ChannelTitle[6].Name=Sonnette\n" +
+            "table.ChannelTitle[7].Name=Jardin\n",
+        "states[0].channel=0\nstates[0].connectionState=Connected\n" +
+            "states[1].channel=3\nstates[1].connectionState=Connected\n" +
+            "states[2].channel=4\nstates[2].connectionState=Connected\n" +
+            "states[3].channel=6\nstates[3].connectionState=Connected\n" +
+            "states[4].channel=7\nstates[4].connectionState=Connected\n",
+    )
+
+    @Test
+    fun `cameras motorisees detectees via RemoteDevice`() = runBlocking {
+        titlesAndStates.forEach { server.enqueue(MockResponse().setBody(it)) }
+        server.enqueue(
+            MockResponse().setBody(
+                "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_0.Name=ABC123\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_0.Enable=true\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_0.Address=192.168.1.65\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_0.DeviceType=DH-SD1A404XB-GNR\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_3.DeviceType=IPC-HDBW3241F-AS-M\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_4.DeviceType=DH-SD5A225GB-HNR\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_6.DeviceType=DHI-VTO2211G-WP\r\n" +
+                    "table.RemoteDevice.uuid:System_CONFIG_NETCAMERA_INFO_7.DeviceType=DH-SD5A225XA-HNR\r\n"
+            )
+        )
+
+        assertEquals(
+            listOf(
+                Camera(1, "Allée", ptz = true),
+                Camera(4, "Porte", ptz = false),
+                Camera(5, "Parking", ptz = true),
+                Camera(7, "Sonnette", ptz = false),
+                Camera(8, "Jardin", ptz = true),
+            ),
+            driver().listCameras(),
+        )
+        server.takeRequest(); server.takeRequest()
+        assertEquals(
+            "/cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice",
+            server.takeRequest().path,
+        )
+    }
+
+    @Test
+    fun `aucune camera motorisee si RemoteDevice indisponible`() = runBlocking {
+        titlesAndStates.forEach { server.enqueue(MockResponse().setBody(it)) }
+        server.enqueue(badRequest())
+
+        val cameras = driver().listCameras()
+        assertEquals(listOf(1, 4, 5, 7, 8), cameras.map { it.channel })
+        assertTrue(cameras.none { it.ptz })
+    }
+
+    @Test
+    fun `aucune camera motorisee si RemoteDevice illisible`() = runBlocking {
+        titlesAndStates.forEach { server.enqueue(MockResponse().setBody(it)) }
+        server.enqueue(MockResponse().setBody("n'importe quoi\r\nfoo.DeviceType=SD49225XA-HNR\r\n"))
+
+        val cameras = driver().listCameras()
+        assertEquals(5, cameras.size)
+        assertTrue(cameras.none { it.ptz })
+    }
+
+    private fun badRequest() = MockResponse().setResponseCode(400).setBody("Error\r\nBad Request!\r\n")
 
     @Test
     fun `commandes PTZ`() = runBlocking {

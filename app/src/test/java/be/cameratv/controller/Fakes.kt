@@ -20,25 +20,44 @@ class FakeSettings(var stored: NvrConfig? = null) : SettingsRepository {
     }
 }
 
-/** Pilote factice : [onList] décide du résultat de listCameras (liste, exception, suspension...). */
+/**
+ * Pilote factice : [onList] décide du résultat de listCameras (liste, exception, suspension...).
+ * Les ordres PTZ sont consignés dans [ptzCalls] à la fin de leur exécution
+ * ("start:1:LEFT", "stop:1:LEFT", "preset:1:3"). [onPtzStart] permet de ralentir ou de faire
+ * échouer un démarrage (rien n'est alors consigné).
+ */
 class FakeDriver(
     val config: NvrConfig,
     private val onList: suspend (NvrConfig) -> List<Camera>,
+    private val ptzCalls: MutableList<String> = mutableListOf(),
+    private val onPtzStart: suspend (Camera, PtzDirection) -> Unit = { _, _ -> },
 ) : CameraDriver {
     override suspend fun listCameras(): List<Camera> = onList(config)
     override fun streamUrl(camera: Camera, quality: StreamQuality) =
         "rtsp://${config.host}/ch${camera.channel}/$quality"
     override suspend fun snapshot(camera: Camera) = ByteArray(0)
-    override suspend fun ptzStart(camera: Camera, direction: PtzDirection, speed: Int) = Unit
-    override suspend fun ptzStop(camera: Camera, direction: PtzDirection) = Unit
-    override suspend fun gotoPreset(camera: Camera, preset: Int) = Unit
+    override suspend fun ptzStart(camera: Camera, direction: PtzDirection, speed: Int) {
+        onPtzStart(camera, direction)
+        ptzCalls += "start:${camera.channel}:$direction"
+    }
+    override suspend fun ptzStop(camera: Camera, direction: PtzDirection) {
+        ptzCalls += "stop:${camera.channel}:$direction"
+    }
+    override suspend fun gotoPreset(camera: Camera, preset: Int) {
+        ptzCalls += "preset:${camera.channel}:$preset"
+    }
 }
 
 class FakeDriverFactory(var onList: suspend (NvrConfig) -> List<Camera>) : CameraDriverFactory {
     val created = mutableListOf<NvrConfig>()
+
+    /** Ordres PTZ reçus par tous les pilotes créés, dans l'ordre. */
+    val ptzCalls = mutableListOf<String>()
+    var onPtzStart: suspend (Camera, PtzDirection) -> Unit = { _, _ -> }
+
     override fun create(config: NvrConfig): CameraDriver {
         created += config
-        return FakeDriver(config, onList)
+        return FakeDriver(config, onList, ptzCalls) { camera, direction -> onPtzStart(camera, direction) }
     }
 }
 

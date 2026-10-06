@@ -181,6 +181,28 @@ private fun CameraLabel(camera: Camera, focused: Boolean, modifier: Modifier = M
             fontSize = 16.sp,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            // Le nom se tronque en premier : la pastille PTZ reste visible sur les petites tuiles.
+            modifier = Modifier.weight(1f, fill = false),
         )
+        if (camera.ptz) PtzChip(onAccent = focused)
     }
+}
+
+/** Petite pastille « PTZ » : caméra motorisée, pilotable en plein écran. */
+@Composable
+private fun PtzChip(onAccent: Boolean) {
+    Text(
+        text = "PTZ",
+        // Couleurs inversées quand l'étiquette elle-même est sur fond accent (tuile sélectionnée).
+        color = if (onAccent) CameraTvColors.Accent else CameraTvColors.OnAccent,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        maxLines = 1,
+        modifier = Modifier
+            .background(
+                color = if (onAccent) CameraTvColors.OnAccent else CameraTvColors.Accent,
+                shape = RoundedCornerShape(3.dp),
+            )
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
 }
