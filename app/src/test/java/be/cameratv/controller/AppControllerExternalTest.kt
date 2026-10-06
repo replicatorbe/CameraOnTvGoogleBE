@@ -181,6 +181,7 @@ class AppControllerExternalTest {
         val gate = CompletableDeferred<Unit>()
         val c = controller(factory = FakeDriverFactory { gate.await(); cams })
         c.start()
+        c.onUiVisibilityChanged(true)
         runCurrent()
         assertTrue(c.onExternalCommand(Exit))
         gate.complete(Unit)
@@ -339,6 +340,7 @@ class AppControllerExternalTest {
     fun `Exit arrête le mouvement, quitte le mode PTZ et lève le drapeau jusqu'à l'acquittement`() = runTest {
         val factory = FakeDriverFactory { cams }
         val c = connected(factory)
+        c.onUiVisibilityChanged(true)
         c.onExternalCommand(ShowCamera(ByChannel(4)))
         c.onCommand(RemoteCommand.Ok)
         c.onCommand(RemoteCommand.ChannelUp)
@@ -464,5 +466,51 @@ class AppControllerExternalTest {
         c.retry()
         advanceUntilIdle()
         assertEquals(listOf("start:3:LEFT", "stop:3:LEFT"), factory.ptzCalls)
+    }
+
+    // --- Application en arrière-plan ----------------------------------------------------------
+
+    @Test
+    fun `une caméra demandée pendant une autre application ramène l'écran au premier plan`() = runTest {
+        val c = connected(FakeDriverFactory { cams })
+        assertFalse(c.state.value.uiVisible)
+        c.onExternalCommand(ShowCamera(ByChannel(4)))
+        assertTrue(c.state.value.foregroundRequested)
+        c.onUiVisibilityChanged(true)
+        assertFalse(c.state.value.foregroundRequested)
+    }
+
+    @Test
+    fun `l'écran visible ne demande pas de passage au premier plan`() = runTest {
+        val c = connected(FakeDriverFactory { cams })
+        c.onUiVisibilityChanged(true)
+        c.onExternalCommand(ShowGrid)
+        assertFalse(c.state.value.foregroundRequested)
+    }
+
+    @Test
+    fun `fin d'affichage temporaire ouvert depuis l'arrière-plan, retour à l'application précédente`() = runTest {
+        val c = connected(FakeDriverFactory { cams })
+        c.onExternalCommand(ShowCamera(ByChannel(4), durationSec = 30))
+        c.onUiVisibilityChanged(true)
+        advanceTimeBy(30_001)
+        assertTrue(c.state.value.exitRequested)
+    }
+
+    @Test
+    fun `fin d'affichage temporaire ouvert depuis l'écran visible, pas de sortie`() = runTest {
+        val c = connected(FakeDriverFactory { cams })
+        c.onUiVisibilityChanged(true)
+        c.onExternalCommand(ShowCamera(ByChannel(4), durationSec = 30))
+        advanceTimeBy(30_001)
+        assertFalse(c.state.value.exitRequested)
+        assertEquals(Screen.Grid, c.state.value.screen)
+    }
+
+    @Test
+    fun `Exit pendant une autre application ne fait rien`() = runTest {
+        val c = connected(FakeDriverFactory { cams })
+        assertTrue(c.onExternalCommand(Exit))
+        assertFalse(c.state.value.exitRequested)
     }
 }

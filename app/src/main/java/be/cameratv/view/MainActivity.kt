@@ -2,7 +2,6 @@ package be.cameratv.view
 
 import android.content.Intent
 import android.os.Bundle
-import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -12,33 +11,24 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import be.cameratv.controller.AppController
 import be.cameratv.controller.ExternalCommandParser
-import be.cameratv.controller.ExternalController
 import be.cameratv.controller.RemoteCommand
 import be.cameratv.controller.RemoteKeyMapper
-import be.cameratv.model.AppModel
 import be.cameratv.BuildConfig
-import be.cameratv.model.DataStoreSettingsRepository
+import be.cameratv.CameraTvApp
 import be.cameratv.model.MqttConfig
 import be.cameratv.model.NvrConfig
 import be.cameratv.model.Screen
-import be.cameratv.model.driver.CameraDriverFactory
-import be.cameratv.model.bus.PahoMessageBus
-import be.cameratv.model.driver.dahua.DahuaCgiDriver
-import java.util.UUID
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
- * Racine de composition : assemble Modèle, Contrôleur et Vue (injection manuelle),
- * puis transmet au contrôleur les touches de la télécommande et les liens profonds.
+ * Vue principale : affiche l'état du Modèle et transmet au contrôleur les touches de la
+ * télécommande et les liens profonds. Modèle et Contrôleurs vivent dans [CameraTvApp].
  */
 class MainActivity : ComponentActivity() {
 
     private lateinit var controller: AppController
-
-    /** Pilotage par la domotique (MQTT), actif uniquement au premier plan. */
-    private lateinit var externalController: ExternalController
 
     /**
      * Touches dont l'ACTION_DOWN a été consommé : on consomme aussi leur ACTION_UP
@@ -49,15 +39,10 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val model = AppModel()
-        val settings = DataStoreSettingsRepository(applicationContext)
-        val driverFactory = CameraDriverFactory { config -> DahuaCgiDriver(config) }
-        controller = AppController(model, settings, driverFactory, lifecycleScope)
-        val bus = PahoMessageBus(clientId = "cameratv-" + stableDeviceId())
-        externalController = ExternalController(model, controller, bus, lifecycleScope)
+        controller = (application as CameraTvApp).controller
 
-        val debugConfig = debugConfigFromIntent()
-        if (debugConfig != null) controller.submitSetup(debugConfig) else controller.start()
+        // La connexion au NVR est lancée par l'application ; en debug, adb peut la remplacer.
+        debugConfigFromIntent()?.let { controller.submitSetup(it) }
         applyDebugMqttFromIntent()
         // Recréation de l'activité : le lien profond a déjà été traité.
         if (savedInstanceState == null) handleDeepLink(intent)
@@ -81,7 +66,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        externalController.start()
+        controller.onUiVisibilityChanged(true)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -117,7 +102,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         releasePressedKeys()
-        externalController.stop()
+        controller.onUiVisibilityChanged(false)
         super.onStop()
     }
 
@@ -176,12 +161,6 @@ class MainActivity : ComponentActivity() {
                 }
         }
     }
-
-    /** Identifiant MQTT stable d'un appareil à l'autre ; aléatoire si Android ne le fournit pas. */
-    private fun stableDeviceId(): String =
-        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-            ?.takeIf { it.isNotBlank() }
-            ?: UUID.randomUUID().toString()
 
     /**
      * Build debug uniquement : configuration passée par adb, le clavier TV rendant la saisie pénible.

@@ -115,6 +115,7 @@ class ExternalController(
             camera = fullscreen?.channel,
             cameraName = fullscreen?.let { screen -> state.cameras.firstOrNull { it.channel == screen.channel }?.name },
             ptzMode = state.ptzMode,
+            visible = state.uiVisible,
             cameras = state.cameras.map { CameraSnapshot(it.channel, it.name, it.ptz) },
         )
     }
@@ -126,6 +127,8 @@ class ExternalController(
         val camera: Int?,
         val cameraName: String?,
         val ptzMode: Boolean,
+        /** false : la TV affiche une autre application, la caméra n'est pas à l'écran. */
+        val visible: Boolean,
         val cameras: List<CameraSnapshot>,
     )
 

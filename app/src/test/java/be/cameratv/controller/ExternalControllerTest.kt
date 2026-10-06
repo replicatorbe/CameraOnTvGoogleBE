@@ -41,7 +41,7 @@ class ExternalControllerTest {
     private fun online(base: String, value: Boolean) = BusMessage("$base/online", value.toString(), retained = true)
 
     private val gridState =
-        """{"screen":"grid","camera":null,"cameraName":null,"ptzMode":false,""" +
+        """{"screen":"grid","camera":null,"cameraName":null,"ptzMode":false,"visible":false,""" +
             """"cameras":[{"channel":1,"name":"Porte","ptz":false},{"channel":2,"name":"OUESTPTZ","ptz":true}]}"""
 
     @Test
@@ -112,7 +112,7 @@ class ExternalControllerTest {
         assertEquals(
             BusMessage(
                 "cameratv/state",
-                """{"screen":"fullscreen","camera":2,"cameraName":"OUESTPTZ","ptzMode":true,""" +
+                """{"screen":"fullscreen","camera":2,"cameraName":"OUESTPTZ","ptzMode":true,"visible":false,""" +
                     """"cameras":[{"channel":1,"name":"Porte","ptz":false},{"channel":2,"name":"OUESTPTZ","ptz":true}]}""",
                 retained = true,
             ),
@@ -146,6 +146,7 @@ class ExternalControllerTest {
         s.bus.receive("cameratv/cmd/grid", "")
         runCurrent()
         assertEquals(Screen.Grid, s.model.state.value.screen)
+        s.model.update { it.copy(uiVisible = true) }
         s.bus.receive("cameratv/cmd/exit", "")
         runCurrent()
         assertTrue(s.model.state.value.exitRequested)

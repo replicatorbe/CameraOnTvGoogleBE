@@ -15,7 +15,22 @@ L'application se connecte à un broker MQTT (Mosquitto, par exemple celui du plu
 - **Port** : `1883` par défaut.
 - **Préfixe** : `cameratv` par défaut.
 
-> Version actuelle : la connexion MQTT n'est active que lorsque l'application est au premier plan. Le fonctionnement en arrière-plan (sonnette pendant un film, par exemple) arrivera avec le jalon suivant.
+### Fonctionnement en arrière-plan
+
+Un service garde la connexion MQTT ouverte en permanence. Il démarre avec la TV, même si l'application n'est pas ouverte.
+
+Quand une commande `show` ou `grid` arrive pendant qu'une autre application est affichée (un film, par exemple) :
+
+1. l'application passe au premier plan ;
+2. avec `duration`, elle rend ensuite la main à l'application précédente, et le film reprend.
+
+Depuis Android 10, ouvrir un écran depuis l'arrière-plan exige la permission « afficher par-dessus les autres applications ». Sur Google TV, elle s'accorde une seule fois par adb :
+
+```bash
+adb shell appops set be.cameratv SYSTEM_ALERT_WINDOW allow
+```
+
+TV en veille : le réseau est généralement coupé. Il faut d'abord allumer la TV depuis Jeedom ; le service se reconnecte au broker en quelques secondes.
 
 ## Commandes
 
@@ -52,11 +67,16 @@ Si l'utilisateur touche la télécommande pendant un affichage temporaire (`dura
   "camera": 5,
   "cameraName": "OUESTPTZ",
   "ptzMode": false,
+  "visible": true,
   "cameras": [{"channel": 1, "name": "OUESTTERRASSE", "ptz": true}]
 }
 ```
 
-`screen` vaut `setup`, `loading`, `grid` ou `fullscreen`. `camera` et `cameraName` sont `null` hors plein écran.
+Champs :
+
+- `screen` : `setup`, `loading`, `grid` ou `fullscreen` ;
+- `camera` et `cameraName` : `null` hors plein écran ;
+- `visible` : `false` quand la TV affiche une autre application.
 
 ## Équipement Jeedom (plugin jMQTT ou MQTT Manager)
 
@@ -81,7 +101,7 @@ Créer un équipement « Caméras TV » rattaché au broker, avec :
 
 ## Ouvrir l'application depuis Jeedom
 
-Si l'application n'est pas au premier plan, elle peut être ouverte, ou réveillée sur une caméra précise, par un lien profond :
+En complément de MQTT, un lien profond ouvre l'application sur une caméra précise :
 
 ```
 cameratv://show?camera=INTERCOM&duration=30
@@ -98,7 +118,7 @@ Ces liens peuvent être lancés de deux façons :
 adb shell am start -a android.intent.action.VIEW -d "cameratv://show?camera=INTERCOM&duration=30"
 ```
 
-Scénario type « on sonne » (en attendant le jalon suivant) :
+Scénario type « on sonne » :
 
-1. Allumer la TV (commande Jeedom de la TV).
-2. Ouvrir `cameratv://show?camera=INTERCOM&duration=30`.
+1. Si la TV est éteinte, l'allumer (commande Jeedom de la TV) et attendre que `cameratv/online` passe à `true`.
+2. Publier `{"camera": "INTERCOM", "duration": 30}` sur `cameratv/cmd/show`.

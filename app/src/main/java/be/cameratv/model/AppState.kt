@@ -23,6 +23,10 @@ data class AppState(
     val mqttConnected: Boolean = false,
     /** Demande de passage en arrière-plan (commande externe) ; la vue l'exécute puis acquitte. */
     val exitRequested: Boolean = false,
+    /** L'écran de l'application est visible (sinon la TV affiche une autre application). */
+    val uiVisible: Boolean = false,
+    /** Une commande externe veut afficher l'application alors qu'elle est en arrière-plan. */
+    val foregroundRequested: Boolean = false,
 ) {
     /** Colonnes de la grille : 1 caméra = 1, jusqu'à 4 = 2, au-delà = 3 (8 canaux max). */
     val gridColumns: Int

@@ -43,6 +43,8 @@ Par sécurité, la caméra s'arrête d'elle-même si le relâchement de la touch
 
 ```
 app/src/main/java/be/cameratv/
+├── CameraTvApp   Racine de composition : Modèle et Contrôleurs vivent aussi longtemps que le processus
+├── CameraTvService / BootReceiver   Service au premier plan (MQTT permanent), démarré avec la TV
 ├── model/        État de l'application (AppModel, AppState), configuration, pilotes caméras
 │   └── driver/   Interface CameraDriver + implémentation Dahua (API HTTP CGI, authentification Digest)
 ├── controller/   AppController (machine à états des écrans) et RemoteKeyMapper (touches → commandes)
@@ -72,6 +74,12 @@ Installation sur la TV :
 ```bash
 adb connect <IP_TV>:5555
 adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Pour que la domotique puisse afficher une caméra pendant qu'une autre application tourne, accorder une fois la permission d'affichage depuis l'arrière-plan :
+
+```bash
+adb shell appops set be.cameratv SYSTEM_ALERT_WINDOW allow
 ```
 
 Au premier lancement, l'écran de configuration demande l'adresse du NVR et un utilisateur. Un compte dédié est conseillé, avec seulement les droits de vue en direct et de PTZ.

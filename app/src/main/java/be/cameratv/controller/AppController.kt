@@ -154,6 +154,13 @@ class AppController(
         model.update { it.copy(exitRequested = false) }
     }
 
+    /** L'écran de l'application devient visible ou passe derrière une autre application. */
+    fun onUiVisibilityChanged(visible: Boolean) {
+        model.update {
+            it.copy(uiVisible = visible, foregroundRequested = it.foregroundRequested && !visible)
+        }
+    }
+
     /** Relâchement d'une touche dont l'appui a été consommé : arrête un mouvement PTZ en cours. */
     fun onCommandReleased(command: RemoteCommand) {
         val direction = ptzDirectionOf(command) ?: return
@@ -434,10 +441,13 @@ class AppController(
     // --- Commandes externes -------------------------------------------------------------------
 
     private fun applyExternal(command: ExternalCommand, current: AppState): Boolean = when (command) {
-        is ExternalCommand.ShowCamera -> showCameraExternally(command, current)
+        is ExternalCommand.ShowCamera -> showCameraExternally(command, current).also { shown ->
+            if (shown) requestForegroundIfHidden()
+        }
         ExternalCommand.ShowGrid -> {
             cancelAutoReturn()
             showGrid(current.focusedIndex)
+            requestForegroundIfHidden()
             true
         }
         is ExternalCommand.Ptz -> ptzExternally(command, current)
@@ -445,9 +455,15 @@ class AppController(
             stopMovement()
             stopAllExternalMoves()
             cancelAutoReturn()
-            model.update { it.copy(ptzMode = false, exitRequested = true) }
+            // Déjà en arrière-plan : rien à quitter.
+            model.update { it.copy(ptzMode = false, exitRequested = it.uiVisible, foregroundRequested = false) }
             true
         }
+    }
+
+    /** Application en arrière-plan (film, autre app) : elle demande à repasser au premier plan. */
+    private fun requestForegroundIfHidden() {
+        if (!state.value.uiVisible) model.update { it.copy(foregroundRequested = true) }
     }
 
     /** Index de la caméra désignée, ou -1 si elle est inconnue. */
@@ -462,9 +478,9 @@ class AppController(
         val target = Screen.Fullscreen(current.cameras[index].channel)
         val duration = command.durationSec ?: 0
         // Un affichage temporaire déjà en cours garde l'écran d'origine.
-        val previous = returnTarget ?: ReturnTarget(current.screen, current.focusedIndex)
+        val previous = returnTarget ?: ReturnTarget(current.screen, current.focusedIndex, background = !current.uiVisible)
         cancelAutoReturn()
-        if (duration > 0 && previous.screen != target) {
+        if (duration > 0 && (previous.screen != target || previous.background)) {
             returnTarget = previous
             returnTimer = scope.launch {
                 delay(duration * 1000L)
@@ -477,8 +493,14 @@ class AppController(
         return true
     }
 
-    /** Fin d'un affichage temporaire : retour à la grille ou à la caméra affichée avant. */
+    /**
+     * Fin d'un affichage temporaire : retour à la grille ou à la caméra affichée avant.
+     * Si l'application avait été tirée de l'arrière-plan, elle y retourne (le film reprend).
+     */
     private fun restore(previous: ReturnTarget) {
+        if (previous.background) {
+            model.update { it.copy(exitRequested = it.uiVisible, foregroundRequested = false) }
+        }
         val cameras = state.value.cameras
         if (cameras.isEmpty()) return
         val screen = previous.screen
@@ -551,7 +573,8 @@ class AppController(
         var stopTimer: Job? = null
     }
 
-    private data class ReturnTarget(val screen: Screen, val focusedIndex: Int)
+    /** [background] : l'application était en arrière-plan avant l'affichage temporaire. */
+    private data class ReturnTarget(val screen: Screen, val focusedIndex: Int, val background: Boolean = false)
 
     private companion object {
         const val GENERIC_ERROR = "Connexion au NVR impossible"
