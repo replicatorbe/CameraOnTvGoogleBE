@@ -52,6 +52,12 @@ class AppController(
     /** Arrête le mouvement si aucun appui (ou répétition) n'arrive à temps : protège d'un relâchement perdu. */
     private var safetyTimer: Job? = null
 
+    /** Durée minimale du mouvement en cours : un appui bref produit un petit déplacement visible. */
+    private var minPulse: Job? = null
+
+    /** Incrémenté à chaque appui : invalide un arrêt différé si la touche est de nouveau pressée. */
+    private var pressCount = 0
+
     /** Dernier ordre PTZ confié au pilote ; chaque nouvel ordre attend la fin du précédent. */
     private var lastPtzOrder: Job? = null
 
@@ -94,7 +100,18 @@ class AppController(
     /** Relâchement d'une touche dont l'appui a été consommé : arrête un mouvement PTZ en cours. */
     fun onCommandReleased(command: RemoteCommand) {
         val direction = ptzDirectionOf(command) ?: return
-        if (direction == movingDirection) stopMovement()
+        if (direction != movingDirection) return
+        val pulse = minPulse
+        if (pulse == null || !pulse.isActive) {
+            stopMovement()
+            return
+        }
+        // Appui bref : on laisse la caméra bouger jusqu'à la durée minimale avant l'arrêt.
+        val press = pressCount
+        scope.launch {
+            pulse.join()
+            if (press == pressCount) stopMovement()
+        }
     }
 
     fun streamUrl(camera: Camera, quality: StreamQuality): String? =
@@ -285,11 +302,13 @@ class AppController(
      * les répétitions de la même touche ne font que relancer le minuteur de sécurité.
      */
     private fun pressDirection(camera: Camera, direction: PtzDirection) {
+        pressCount++
         if (direction != movingDirection || camera != movingCamera) {
             stopMovement()
             movingDirection = direction
             movingCamera = camera
             sendPtzOrder { it.ptzStart(camera, direction) }
+            minPulse = scope.launch { delay(PTZ_MIN_PULSE_MS) }
         }
         restartSafetyTimer()
     }
@@ -350,5 +369,8 @@ class AppController(
 
         /** Couvre le délai avant la première répétition d'une touche maintenue (~500 ms). */
         const val PTZ_SAFETY_TIMEOUT_MS = 800L
+
+        /** Mouvement minimal d'un appui bref : le dôme accélère lentement (mesuré sur SD5A, vitesse 4 : 150 ms ≈ 0,1°, 500 ms ≈ 2°). */
+        const val PTZ_MIN_PULSE_MS = 500L
     }
 }

@@ -22,6 +22,18 @@ Le mode hybride de la grille vient d'une contrainte matérielle : beaucoup de TV
 | Menu | Configuration | Configuration |
 | Retour | Quitter | Retour à la grille |
 
+Mode PTZ (plein écran sur une caméra motorisée, détectée automatiquement) :
+
+| Touche | Action |
+|---|---|
+| OK | Entrer / sortir du mode PTZ |
+| Flèches | Orienter (maintenir pour un mouvement continu, appui bref pour un petit ajustement) |
+| CH+ / CH- | Zoom avant / arrière |
+| 1 à 9 | Aller au preset N |
+| Retour | Sortir du mode PTZ |
+
+Par sécurité, la caméra s'arrête d'elle-même si le relâchement de la touche n'est pas reçu.
+
 ## Matériel testé
 
 - NVR Dahua DHI-NVR4108-8P-4KS2, caméras Dahua, portier VTO DHI-VTO2211G-WP.
@@ -79,6 +91,6 @@ adb shell am start -n be.cameratv/.view.MainActivity \
 ## Feuille de route
 
 - [x] MVP 1 : grille, plein écran, navigation à la télécommande
-- [ ] MVP 2 : PTZ (orientation, zoom, presets) à la télécommande
+- [x] MVP 2 : PTZ (orientation, zoom, presets) à la télécommande
 - [ ] MVP 3 : pilotage externe via MQTT (Jeedom)
 - [ ] MVP 4 : événements du portier (appel → réveil de la TV, incrustation de l'image)

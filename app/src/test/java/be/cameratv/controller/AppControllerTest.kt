@@ -407,7 +407,7 @@ class AppControllerTest {
     }
 
     @Test
-    fun `appui sur une flèche démarre le mouvement, relâchement l'arrête`() = runTest {
+    fun `appui bref sur une flèche, mouvement minimal puis arrêt`() = runTest {
         val factory = FakeDriverFactory { ptzCameras }
         val c = ptzController(factory)
         assertTrue(c.onCommand(Left))
@@ -417,10 +417,40 @@ class AppControllerTest {
 
         c.onCommandReleased(Left)
         runCurrent()
+        assertEquals(listOf("start:1:LEFT"), factory.ptzCalls) // Arrêt différé : durée minimale.
+
+        advanceTimeBy(500)
+        runCurrent()
         assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
         assertTrue(c.state.value.ptzMode)
 
         advanceUntilIdle() // Le minuteur de sécurité ne renvoie pas d'arrêt.
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `touche maintenue au-delà de la durée minimale, arrêt immédiat au relâchement`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        advanceTimeBy(700)
+        c.onCommandReleased(Left)
+        runCurrent()
+        assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
+    }
+
+    @Test
+    fun `nouvel appui pendant la durée minimale, le mouvement continue sans arrêt`() = runTest {
+        val factory = FakeDriverFactory { ptzCameras }
+        val c = ptzController(factory)
+        c.onCommand(Left)
+        c.onCommandReleased(Left)
+        advanceTimeBy(50)
+        c.onCommand(Left)
+        advanceTimeBy(600)
+        assertEquals(listOf("start:1:LEFT"), factory.ptzCalls)
+        c.onCommandReleased(Left)
+        runCurrent()
         assertEquals(listOf("start:1:LEFT", "stop:1:LEFT"), factory.ptzCalls)
     }
 
@@ -586,6 +616,7 @@ class AppControllerTest {
         val c = ptzController(factory)
         c.onCommand(Left)
         c.onCommandReleased(Left)
+        advanceTimeBy(600) // Au-delà de la durée minimale : l'arrêt est parti.
         c.onCommand(Left)
         advanceTimeBy(100)
         assertEquals(listOf("stop:1:LEFT", "start:1:LEFT"), factory.ptzCalls)
