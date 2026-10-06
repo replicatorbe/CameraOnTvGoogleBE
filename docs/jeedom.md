@@ -30,7 +30,7 @@ Depuis Android 10, ouvrir un écran depuis l'arrière-plan exige la permission �
 adb shell appops set be.cameratv SYSTEM_ALERT_WINDOW allow
 ```
 
-TV en veille : le réseau est généralement coupé. Il faut d'abord allumer la TV depuis Jeedom ; le service se reconnecte au broker en quelques secondes.
+TV en veille : elle garde son réseau, la connexion MQTT reste ouverte et `cameratv/online` reste à `true`. L'effet d'une commande `show` reçue pendant la veille n'a pas été testé : allumer d'abord la TV depuis Jeedom. Au rallumage, l'application rouvre une connexion neuve au broker en environ 1,5 s.
 
 ## Commandes
 
@@ -56,8 +56,10 @@ Si l'utilisateur touche la télécommande pendant un affichage temporaire (`dura
 
 `cameratv/online` (retenu) vaut :
 
-- `true` quand l'application est connectée ;
-- `false` à la fermeture ou en cas de coupure. C'est aussi le message de dernière volonté MQTT, que le broker publie lui-même si la connexion est perdue.
+- `true` quand l'application est connectée, y compris TV en veille ;
+- `false` à l'arrêt du service ou en cas de coupure réseau. C'est aussi le message de dernière volonté MQTT, que le broker publie lui-même si la connexion est perdue.
+
+`online` n'indique donc pas si la TV est allumée : utiliser pour cela l'état de l'équipement Jeedom de la TV.
 
 `cameratv/state` (retenu) :
 
@@ -120,5 +122,5 @@ adb shell am start -a android.intent.action.VIEW -d "cameratv://show?camera=INTE
 
 Scénario type « on sonne » :
 
-1. Si la TV est éteinte, l'allumer (commande Jeedom de la TV) et attendre que `cameratv/online` passe à `true`.
+1. Si la TV est éteinte, d'après l'état de son équipement Jeedom : l'allumer, puis attendre 3 secondes.
 2. Publier `{"camera": "INTERCOM", "duration": 30}` sur `cameratv/cmd/show`.

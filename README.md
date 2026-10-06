@@ -157,7 +157,7 @@ adb shell settings put global animator_duration_scale 0.5
 
 ### Bon à savoir
 
-- **La veille ne coupe pas la TV.** Elle se met en « suspend to RAM » : les applications restent en mémoire et sont gelées.
-  - Au réveil, l'application se reconnecte immédiatement au broker MQTT.
-  - Pendant la veille, le broker publie `cameratv/online = false`, grâce au message de dernière volonté MQTT.
+- **En veille, la TV garde son réseau.** L'écran est éteint et Android en veille, mais la connexion MQTT reste ouverte et `cameratv/online` reste à `true`. Mesuré après 5 minutes de veille.
+  - Au réveil (rallumage de l'écran), l'application rouvre par sécurité une connexion neuve au broker. Elle était de nouveau en ligne environ 1,5 s après l'allumage.
+  - Au réveil, la TV revient sur la dernière application affichée avant la mise en veille.
 - **TCL a son propre gestionnaire de mémoire** (`com.tcl.guard`). Il ne peut pas être désactivé sans root, mais il épargne les applications qui ont un service au premier plan, comme celle-ci.
