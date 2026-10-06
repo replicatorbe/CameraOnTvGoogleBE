@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Bannière 320x180 du launcher Google TV. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp"
+    android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#FF14202E" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#FF4FC3F7"
+        android:pathData="M110,65h70a10,10 0,0 1,10 10v30a10,10 0,0 1,-10 10h-70a10,10 0,0 1,-10 -10v-30a10,10 0,0 1,10 -10z" />
+    <path android:fillColor="#FF4FC3F7" android:pathData="M195,80l25,-15v50l-25,-15z" />
+    <path android:fillColor="#FF14202E"
+        android:pathData="M145,90m-14,0a14,14 0,1 1,28 0a14,14 0,1 1,-28 0" />
+</vector>
