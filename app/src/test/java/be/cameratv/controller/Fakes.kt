@@ -64,6 +64,11 @@ class FakeBus : MessageBus {
         if (_connected.value) published += message
     }
 
+    var reconnects = 0
+    override fun reconnectNow() {
+        reconnects++
+    }
+
     override fun stop(farewell: BusMessage?) {
         farewell?.let { publish(it) }
         stopped += farewell

@@ -244,4 +244,15 @@ class ExternalControllerTest {
         s.external.stop()
         assertTrue(s.bus.stopped.isEmpty())
     }
+
+    @Test
+    fun `sortie de veille, reconnexion immédiate seulement si MQTT est configuré`() = runTest {
+        val s = setup()
+        s.external.onNetworkMaybeRestored()
+        assertEquals(1, s.bus.reconnects)
+
+        val disabled = setup(mqttConfig = null)
+        disabled.external.onNetworkMaybeRestored()
+        assertEquals(0, disabled.bus.reconnects)
+    }
 }

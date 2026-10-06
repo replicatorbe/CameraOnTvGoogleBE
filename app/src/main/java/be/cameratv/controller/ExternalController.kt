@@ -103,6 +103,11 @@ class ExternalController(
 
     private fun offline(config: MqttConfig) = BusMessage("${config.baseTopic}/online", "false", retained = true)
 
+    /** La TV sort de veille ou retrouve le réseau : reconnexion immédiate au broker. */
+    fun onNetworkMaybeRestored() {
+        if (model.state.value.mqtt != null) bus.reconnectNow()
+    }
+
     private fun snapshotOf(state: AppState): StateSnapshot {
         val fullscreen = state.screen as? Screen.Fullscreen
         return StateSnapshot(

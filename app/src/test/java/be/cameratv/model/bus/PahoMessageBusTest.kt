@@ -115,7 +115,7 @@ class PahoMessageBusTest {
         val options = bus.currentOptions!!
         assertTrue(options.isCleanSession)
         assertTrue(options.isAutomaticReconnect)
-        assertEquals(30, options.keepAliveInterval)
+        assertEquals(15, options.keepAliveInterval)
         assertEquals(10, options.connectionTimeout)
         assertEquals("cameratv/online", options.willDestination)
         assertEquals("offline-will", String(options.willMessage.payload))
@@ -209,6 +209,36 @@ class PahoMessageBusTest {
 
     // --- Outils ---
 
+    @Test
+    fun `reconnexion immédiate, nouvelle session et abonnements rétablis`() {
+        startBroker()
+        bus.start(config(), listOf("cameratv/cmd/#"), will)
+        awaitConnected()
+
+        bus.reconnectNow()
+        // La session est remplacée : déconnexion puis reconnexion.
+        runBlocking { withTimeout(5_000) { bus.connected.first { !it } } }
+        awaitConnected()
+
+        val received = LinkedBlockingQueue<BusMessage>()
+        val collector = thread { runBlocking { bus.messages.collect { received.put(it) } } }
+        try {
+            Thread.sleep(100)
+            observer().publish("cameratv/cmd/grid", "".toByteArray(), 1, false)
+            assertEquals("cameratv/cmd/grid", received.poll(5, TimeUnit.SECONDS)?.topic)
+        } finally {
+            collector.interrupt()
+        }
+    }
+
+    @Test
+    fun `reconnexion immédiate sans effet si le bus est arrêté`() {
+        startBroker()
+        bus.reconnectNow()
+        Thread.sleep(500)
+        assertEquals(false, bus.connected.value)
+    }
+
     private fun config(port: Int = brokerPort) = MqttConfig(host = "localhost", port = port)
 
     private fun startBroker() {
@@ -219,7 +249,17 @@ class PahoMessageBusTest {
             setProperty("persistence_enabled", "false")
             setProperty("allow_anonymous", "true")
         }
-        broker = Server().apply { startServer(MemoryConfig(props)) }
+        // Le port libre choisi au départ peut être brièvement occupé : quelques nouvelles tentatives.
+        var attempt = 0
+        while (true) {
+            try {
+                broker = Server().apply { startServer(MemoryConfig(props)) }
+                return
+            } catch (e: RuntimeException) {
+                if (++attempt >= 5) throw e
+                Thread.sleep(300)
+            }
+        }
     }
 
     private fun awaitConnected(timeoutMillis: Long = 5_000) = runBlocking {

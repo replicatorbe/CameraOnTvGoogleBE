@@ -4,9 +4,13 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -21,6 +25,29 @@ class CameraTvService : Service() {
 
     private val app get() = application as CameraTvApp
 
+    /** Sortie de veille : l'écran se rallume, la connexion MQTT d'avant la veille est morte. */
+    private val screenOnReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            app.externalController.onNetworkMaybeRestored()
+        }
+    }
+
+    /** Retour du réseau après une coupure (le premier rappel, à l'enregistrement, est ignoré). */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        private var lost = false
+
+        override fun onLost(network: Network) {
+            lost = true
+        }
+
+        override fun onAvailable(network: Network) {
+            if (lost) {
+                lost = false
+                app.externalController.onNetworkMaybeRestored()
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -30,11 +57,15 @@ class CameraTvService : Service() {
         }
         ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(), type)
         app.externalController.start()
+        registerReceiver(screenOnReceiver, IntentFilter(Intent.ACTION_SCREEN_ON))
+        getSystemService(ConnectivityManager::class.java).registerDefaultNetworkCallback(networkCallback)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
+        unregisterReceiver(screenOnReceiver)
+        getSystemService(ConnectivityManager::class.java).unregisterNetworkCallback(networkCallback)
         app.externalController.stop()
         super.onDestroy()
     }

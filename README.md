@@ -76,11 +76,7 @@ adb connect <IP_TV>:5555
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Pour que la domotique puisse afficher une caméra pendant qu'une autre application tourne, accorder une fois la permission d'affichage depuis l'arrière-plan :
-
-```bash
-adb shell appops set be.cameratv SYSTEM_ALERT_WINDOW allow
-```
+Ensuite, appliquer les réglages de la section [Optimiser la TV](#optimiser-la-tv-adb-sans-root) : au minimum les deux premiers, sans lesquels le pilotage en arrière-plan ne fonctionne pas.
 
 Au premier lancement, l'écran de configuration demande l'adresse du NVR et un utilisateur. Un compte dédié est conseillé, avec seulement les droits de vue en direct et de PTZ.
 
@@ -96,9 +92,72 @@ adb shell am start -n be.cameratv/.view.MainActivity \
 - Flux secondaires en **H.264** (pas H.265).
 - **Smart Codec désactivé** (H.264+ / H.265+).
 
-## Feuille de route
+## Optimiser la TV (adb, sans root)
 
-- [x] MVP 1 : grille, plein écran, navigation à la télécommande
-- [x] MVP 2 : PTZ (orientation, zoom, presets) à la télécommande
-- [x] MVP 3 : pilotage externe via MQTT (Jeedom), voir [docs/jeedom.md](docs/jeedom.md)
-- [ ] MVP 4 : événements du portier (appel → réveil de la TV, incrustation de l'image)
+Réglages vérifiés sur une TCL Google TV (Android 11, puce Realtek RTD2851A, 2 Go de RAM). Ils sont tous réversibles et survivent à un redémarrage. À lancer depuis une machine du réseau, après `adb connect <IP_TV>:5555`.
+
+### Indispensables au pilotage en arrière-plan
+
+```bash
+# Ouvrir l'écran depuis l'arrière-plan (commande show reçue pendant un film)
+adb shell appops set be.cameratv SYSTEM_ALERT_WINDOW allow
+
+# TCL : autoriser le démarrage automatique (refusé par défaut, il bloque le service au démarrage)
+adb shell appops set be.cameratv APP_AUTO_START allow
+```
+
+### Recommandés
+
+```bash
+# Exempter l'application de l'économiseur d'énergie et des restrictions d'arrière-plan
+adb shell dumpsys deviceidle whitelist +be.cameratv
+adb shell appops set be.cameratv RUN_IN_BACKGROUND allow
+adb shell appops set be.cameratv RUN_ANY_IN_BACKGROUND allow
+```
+
+Vérification :
+
+```bash
+adb shell appops get be.cameratv
+adb shell dumpsys deviceidle whitelist | grep cameratv
+```
+
+### Libérer de la mémoire (optionnel)
+
+Avec 2 Go de RAM, la mémoire libre descend vite sous les 500 Mo. Les gains les plus nets :
+
+```bash
+# Économiseur d'écran / mode ambiant Google TV (~200 Mo)
+adb shell settings put secure screensaver_enabled 0          # réactiver : 1
+
+# Applications TCL inutilisées (désactivées, pas désinstallées)
+adb shell pm disable-user --user 0 com.tcl.usercenter        # compte TCL
+adb shell pm disable-user --user 0 com.tcl.miracast          # Miracast (Chromecast reste disponible)
+adb shell pm disable-user --user 0 com.tcl.esticker
+adb shell pm disable-user --user 0 tv.wuaki.apptv            # Rakuten TV
+# réactiver : adb shell pm enable <paquet>
+```
+
+`com.tcl.smartalexa` est protégé par le système : il ne peut pas être désactivé sans root.
+
+Pour voir les plus gros consommateurs :
+
+```bash
+adb shell dumpsys meminfo | sed -n '/Total PSS by process/,/Total PSS by OOM/p'
+```
+
+### Interface plus réactive (optionnel)
+
+```bash
+adb shell settings put global window_animation_scale 0.5
+adb shell settings put global transition_animation_scale 0.5
+adb shell settings put global animator_duration_scale 0.5
+# valeur d'origine : 1
+```
+
+### Bon à savoir
+
+- **La veille ne coupe pas la TV.** Elle se met en « suspend to RAM » : les applications restent en mémoire et sont gelées.
+  - Au réveil, l'application se reconnecte immédiatement au broker MQTT.
+  - Pendant la veille, le broker publie `cameratv/online = false`, grâce au message de dernière volonté MQTT.
+- **TCL a son propre gestionnaire de mémoire** (`com.tcl.guard`). Il ne peut pas être désactivé sans root, mais il épargne les applications qui ont un service au premier plan, comme celle-ci.

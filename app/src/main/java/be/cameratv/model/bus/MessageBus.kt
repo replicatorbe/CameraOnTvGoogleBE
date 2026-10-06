@@ -22,6 +22,12 @@ interface MessageBus {
     /** Ignoré (sans erreur) si le bus n'est pas connecté. */
     fun publish(message: BusMessage)
 
+    /**
+     * Abandonne la connexion en cours et se reconnecte tout de suite, sans attendre que la perte
+     * soit détectée (sortie de veille, retour du réseau). Sans effet si le bus n'est pas démarré.
+     */
+    fun reconnectNow()
+
     /** Publie [farewell] s'il est fourni, puis se déconnecte proprement. */
     fun stop(farewell: BusMessage? = null)
 }

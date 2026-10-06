@@ -49,11 +49,15 @@ class PahoMessageBus internal constructor(
     @Volatile
     private var session: Session? = null
 
+    /** Paramètres du dernier [start], pour [reconnectNow]. */
+    private var lastStart: Triple<MqttConfig, List<String>, BusMessage>? = null
+
     /** Options de la session courante (exposées pour les tests). */
     internal val currentOptions: MqttConnectOptions? get() = session?.options
 
     override fun start(config: MqttConfig, subscriptions: List<String>, will: BusMessage) {
         synchronized(lock) {
+            lastStart = Triple(config, subscriptions.toList(), will)
             session?.let { teardown(it, farewell = null) }
             session = null
             val client = try {
@@ -96,9 +100,24 @@ class PahoMessageBus internal constructor(
 
     override fun stop(farewell: BusMessage?) {
         synchronized(lock) {
+            lastStart = null
             val current = session ?: return
             session = null
             teardown(current, farewell)
+        }
+    }
+
+    /**
+     * Après une mise en veille, la socket est morte mais Paho ne le sait qu'au keepalive suivant
+     * (jusqu'à 1,5 × [KEEP_ALIVE_SECONDS]) : on repart d'une session neuve, hors du fil appelant
+     * car la fermeture de l'ancienne peut bloquer quelques secondes.
+     */
+    override fun reconnectNow() {
+        scheduler.execute {
+            synchronized(lock) {
+                val (config, subscriptions, will) = lastStart ?: return@execute
+                start(config, subscriptions, will)
+            }
         }
     }
 
@@ -219,7 +238,7 @@ class PahoMessageBus internal constructor(
 
     private companion object {
         const val QOS = 1
-        const val KEEP_ALIVE_SECONDS = 30
+        const val KEEP_ALIVE_SECONDS = 15
         const val CONNECTION_TIMEOUT_SECONDS = 10
         const val DEFAULT_RETRY_DELAY_MILLIS = 5_000L
         const val FAREWELL_TIMEOUT_MILLIS = 1_000L
