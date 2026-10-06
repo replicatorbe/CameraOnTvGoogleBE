@@ -8,6 +8,12 @@ import be.cameratv.model.SettingsRepository
 import be.cameratv.model.StreamQuality
 import be.cameratv.model.driver.CameraDriver
 import be.cameratv.model.driver.CameraDriverFactory
+import be.cameratv.model.bus.BusMessage
+import be.cameratv.model.bus.MessageBus
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 class FakeSettings(var stored: NvrConfig? = null) : SettingsRepository {
     val saved = mutableListOf<NvrConfig>()
@@ -21,9 +27,59 @@ class FakeSettings(var stored: NvrConfig? = null) : SettingsRepository {
     }
 
     var storedMqtt: MqttConfig? = null
-    override suspend fun loadMqtt(): MqttConfig? = storedMqtt
+
+    /** Simule un stockage illisible ou en échec pour la configuration MQTT. */
+    var mqttFails = false
+    override suspend fun loadMqtt(): MqttConfig? {
+        if (mqttFails) throw IllegalStateException("stockage illisible")
+        return storedMqtt
+    }
     override suspend fun saveMqtt(config: MqttConfig?) {
+        if (mqttFails) throw IllegalStateException("stockage en échec")
         storedMqtt = config
+    }
+}
+
+/**
+ * Bus factice : consigne démarrages, publications et arrêts. La connexion est simulée par
+ * [connect] / [disconnect] ; comme le vrai bus, une publication hors connexion est ignorée.
+ */
+class FakeBus : MessageBus {
+    data class Started(val config: MqttConfig, val subscriptions: List<String>, val will: BusMessage)
+
+    private val _connected = MutableStateFlow(false)
+    override val connected: StateFlow<Boolean> = _connected
+    private val _messages = MutableSharedFlow<BusMessage>(extraBufferCapacity = 16)
+    override val messages: Flow<BusMessage> = _messages
+
+    val started = mutableListOf<Started>()
+    val published = mutableListOf<BusMessage>()
+    val stopped = mutableListOf<BusMessage?>()
+
+    override fun start(config: MqttConfig, subscriptions: List<String>, will: BusMessage) {
+        started += Started(config, subscriptions, will)
+    }
+
+    override fun publish(message: BusMessage) {
+        if (_connected.value) published += message
+    }
+
+    override fun stop(farewell: BusMessage?) {
+        farewell?.let { publish(it) }
+        stopped += farewell
+        _connected.value = false
+    }
+
+    fun connect() {
+        _connected.value = true
+    }
+
+    fun disconnect() {
+        _connected.value = false
+    }
+
+    fun receive(topic: String, payload: String) {
+        check(_messages.tryEmit(BusMessage(topic, payload)))
     }
 }
 

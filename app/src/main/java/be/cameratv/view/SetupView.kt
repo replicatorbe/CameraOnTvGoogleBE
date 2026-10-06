@@ -50,10 +50,12 @@ import androidx.tv.material3.Button
 import androidx.tv.material3.Text
 import be.cameratv.controller.AppController
 import be.cameratv.model.AppState
+import be.cameratv.model.MqttConfig
 import be.cameratv.model.NvrConfig
 
 /**
- * Formulaire de configuration du NVR. Ici, la navigation utilise le focus Compose normal
+ * Formulaire de configuration du NVR et, en option, du pilotage domotique (MQTT).
+ * Une seule colonne qui défile : le champ qui reçoit le focus est ramené à l'écran. Ici, la navigation utilise le focus Compose normal
  * (le contrôleur ne reçoit pas les flèches sur cet écran).
  */
 @Composable
@@ -65,6 +67,11 @@ fun SetupView(state: AppState, controller: AppController) {
     var password by rememberSaveable(initial) { mutableStateOf(initial?.password.orEmpty()) }
     var httpPort by rememberSaveable(initial) { mutableStateOf((initial?.httpPort ?: 80).toString()) }
     var rtspPort by rememberSaveable(initial) { mutableStateOf((initial?.rtspPort ?: 554).toString()) }
+    // Domotique : adresse du broker vide = pilotage désactivé.
+    val initialMqtt = state.mqtt
+    var mqttHost by rememberSaveable(initialMqtt) { mutableStateOf(initialMqtt?.host.orEmpty()) }
+    var mqttPort by rememberSaveable(initialMqtt) { mutableStateOf((initialMqtt?.port ?: 1883).toString()) }
+    var mqttBaseTopic by rememberSaveable(initialMqtt) { mutableStateOf(initialMqtt?.baseTopic ?: "cameratv") }
     var validationError by remember { mutableStateOf<String?>(null) }
 
     val firstField = remember { FocusRequester() }
@@ -73,13 +80,24 @@ fun SetupView(state: AppState, controller: AppController) {
     fun submit() {
         val http = httpPort.trim().toIntOrNull()
         val rtsp = rtspPort.trim().toIntOrNull()
+        val mqttEnabled = mqttHost.isNotBlank()
+        val brokerPort = mqttPort.trim().toIntOrNull()
+        val baseTopic = mqttBaseTopic.trim()
         validationError = when {
             host.isBlank() -> "L'adresse du NVR est obligatoire."
             http == null || http !in 1..65535 -> "Le port HTTP doit être un nombre entre 1 et 65535."
             rtsp == null || rtsp !in 1..65535 -> "Le port RTSP doit être un nombre entre 1 et 65535."
+            mqttEnabled && (brokerPort == null || brokerPort !in 1..65535) ->
+                "Le port MQTT doit être un nombre entre 1 et 65535."
+            mqttEnabled && baseTopic.isEmpty() -> "Le topic de base est obligatoire."
+            mqttEnabled && ('#' in baseTopic || '+' in baseTopic) ->
+                "Le topic de base ne peut pas contenir # ni +."
             else -> null
         }
         if (validationError == null) {
+            controller.updateMqtt(
+                if (mqttEnabled) MqttConfig(host = mqttHost.trim(), port = brokerPort!!, baseTopic = baseTopic) else null
+            )
             controller.submitSetup(
                 NvrConfig(
                     host = host.trim(),
@@ -145,6 +163,36 @@ fun SetupView(state: AppState, controller: AppController) {
                     value = rtspPort,
                     onValueChange = { rtspPort = it.filter(Char::isDigit).take(5) },
                     keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Text(
+                "Domotique (MQTT)",
+                color = CameraTvColors.Text,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+            MqttStatus(state)
+            FormField(
+                label = "Adresse du broker (vide = désactivé)",
+                value = mqttHost,
+                onValueChange = { mqttHost = it },
+                keyboardType = KeyboardType.Uri,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                FormField(
+                    label = "Port",
+                    value = mqttPort,
+                    onValueChange = { mqttPort = it.filter(Char::isDigit).take(5) },
+                    keyboardType = KeyboardType.Number,
+                    modifier = Modifier.weight(1f),
+                )
+                FormField(
+                    label = "Topic de base",
+                    value = mqttBaseTopic,
+                    onValueChange = { mqttBaseTopic = it },
                     imeAction = ImeAction.Done,
                     onDone = ::submit,
                     modifier = Modifier.weight(1f),
@@ -164,6 +212,17 @@ fun SetupView(state: AppState, controller: AppController) {
             }
         }
     }
+}
+
+/** État du pilotage domotique, tel que le contrôleur le rapporte. */
+@Composable
+private fun MqttStatus(state: AppState) {
+    val (label, color) = when {
+        state.mqtt == null -> "MQTT : désactivé" to CameraTvColors.TextMuted
+        state.mqttConnected -> "MQTT : connecté" to CameraTvColors.Accent
+        else -> "MQTT : non connecté" to CameraTvColors.TextMuted
+    }
+    Text(label, color = color, fontSize = 20.sp)
 }
 
 /** Champ texte « TV » : libellé au-dessus, gros texte, bordure accentuée quand il a le focus. */

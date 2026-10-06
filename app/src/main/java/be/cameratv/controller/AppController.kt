@@ -62,8 +62,24 @@ class AppController(
     /** Dernier ordre PTZ confié au pilote ; chaque nouvel ordre attend la fin du précédent. */
     private var lastPtzOrder: Job? = null
 
+    // État des commandes externes (domotique, liens profonds), lui aussi confiné au thread principal.
+
+    /** Dernière commande reçue pendant la connexion ; appliquée dès que les caméras sont connues. */
+    private var pendingExternal: ExternalCommand? = null
+
+    /** Mouvements PTZ commandés de l'extérieur, par canal : direction et arrêt programmé. */
+    private val externalMoves = mutableMapOf<Int, ExternalMove>()
+
+    /** Écran à retrouver après un affichage temporaire, et le minuteur qui l'y ramène. */
+    private var returnTarget: ReturnTarget? = null
+    private var returnTimer: Job? = null
+
+    /** Incrémenté par [updateMqtt] : un chargement plus ancien ne doit pas écraser un choix récent. */
+    private var mqttRevision = 0
+
     /** Au lancement : configuration enregistrée → connexion, sinon écran de configuration. */
     fun start() {
+        loadMqtt()
         launchExclusive {
             model.update { it.copy(screen = Screen.Loading, ptzMode = false, error = null) }
             val config = try {
@@ -74,6 +90,7 @@ class AppController(
                 null // Configuration illisible : on repart du formulaire.
             }
             if (config == null) {
+                pendingExternal = null
                 model.update { it.copy(screen = Screen.Setup) }
             } else {
                 connectNow(config)
@@ -90,23 +107,52 @@ class AppController(
     /** Retourne true si la commande a été traitée (l'activité consomme alors la touche). */
     fun onCommand(command: RemoteCommand): Boolean {
         val current = state.value
-        return when (val screen = current.screen) {
+        val handled = when (val screen = current.screen) {
             Screen.Grid -> onGridCommand(command, current)
             is Screen.Fullscreen -> onFullscreenCommand(command, current, screen.channel)
             Screen.Setup -> onSetupCommand(command, current)
             Screen.Loading -> false
         }
+        // L'utilisateur a repris la main : l'affichage temporaire devient définitif.
+        if (handled) cancelAutoReturn()
+        return handled
     }
 
-    // STUB : implémentation à venir (MVP 3).
-    /** Commande de la domotique ; true si elle a été appliquée. */
-    fun onExternalCommand(command: ExternalCommand): Boolean = TODO()
+    /**
+     * Commande de la domotique ; true si elle a été appliquée (ou mise en attente pendant la
+     * connexion). Ignorée sur l'écran de configuration ou si la caméra est inconnue.
+     */
+    fun onExternalCommand(command: ExternalCommand): Boolean {
+        val current = state.value
+        return when (current.screen) {
+            Screen.Setup -> false
+            Screen.Loading -> {
+                pendingExternal = command
+                true
+            }
+            Screen.Grid, is Screen.Fullscreen -> applyExternal(command, current)
+        }
+    }
 
     /** Enregistre la configuration MQTT (null = désactivé) et la place dans l'état. */
-    fun updateMqtt(config: MqttConfig?): Unit = TODO()
+    fun updateMqtt(config: MqttConfig?) {
+        mqttRevision++
+        model.update { it.copy(mqtt = config) }
+        scope.launch {
+            try {
+                settings.saveMqtt(config)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Le pilotage fonctionne pour cette session ; il faudra le ressaisir au prochain lancement.
+            }
+        }
+    }
 
     /** La vue a mis l'application en arrière-plan suite à [AppState.exitRequested]. */
-    fun onExitHandled(): Unit = TODO()
+    fun onExitHandled() {
+        model.update { it.copy(exitRequested = false) }
+    }
 
     /** Relâchement d'une touche dont l'appui a été consommé : arrête un mouvement PTZ en cours. */
     fun onCommandReleased(command: RemoteCommand) {
@@ -148,7 +194,10 @@ class AppController(
 
     /** Annule le travail en cours puis lance [block] : une seule connexion à la fois. */
     private fun launchExclusive(block: suspend CoroutineScope.() -> Unit) {
-        stopMovement() // Avec l'ancien pilote, avant qu'il ne soit remplacé.
+        // Avec l'ancien pilote, avant qu'il ne soit remplacé.
+        stopMovement()
+        stopAllExternalMoves()
+        cancelAutoReturn()
         connectJob?.cancel()
         connectJob = scope.launch(block = block)
     }
@@ -174,6 +223,10 @@ class AppController(
                     error = null,
                 )
             }
+            pendingExternal?.let { command ->
+                pendingExternal = null
+                applyExternal(command, state.value)
+            }
             saveConfig(config)
         } catch (e: CancellationException) {
             throw e
@@ -198,6 +251,7 @@ class AppController(
     }
 
     private fun showSetupError(message: String) {
+        pendingExternal = null
         model.update { it.copy(screen = Screen.Setup, ptzMode = false, error = message) }
     }
 
@@ -287,6 +341,7 @@ class AppController(
 
     private fun showSetup() {
         stopMovement()
+        cancelAutoReturn()
         model.update { it.copy(screen = Screen.Setup, ptzMode = false, error = null) }
     }
 
@@ -316,6 +371,7 @@ class AppController(
         pressCount++
         if (direction != movingDirection || camera != movingCamera) {
             stopMovement()
+            stopExternalMove(camera.channel) // La télécommande reprend la main sur cette caméra.
             movingDirection = direction
             movingCamera = camera
             sendPtzOrder { it.ptzStart(camera, direction) }
@@ -374,6 +430,128 @@ class AppController(
             }
         }
     }
+
+    // --- Commandes externes -------------------------------------------------------------------
+
+    private fun applyExternal(command: ExternalCommand, current: AppState): Boolean = when (command) {
+        is ExternalCommand.ShowCamera -> showCameraExternally(command, current)
+        ExternalCommand.ShowGrid -> {
+            cancelAutoReturn()
+            showGrid(current.focusedIndex)
+            true
+        }
+        is ExternalCommand.Ptz -> ptzExternally(command, current)
+        ExternalCommand.Exit -> {
+            stopMovement()
+            stopAllExternalMoves()
+            cancelAutoReturn()
+            model.update { it.copy(ptzMode = false, exitRequested = true) }
+            true
+        }
+    }
+
+    /** Index de la caméra désignée, ou -1 si elle est inconnue. */
+    private fun resolve(ref: CameraRef, cameras: List<Camera>): Int = when (ref) {
+        is CameraRef.ByChannel -> cameras.indexOfFirst { it.channel == ref.channel }
+        is CameraRef.ByName -> cameras.indexOfFirst { it.name.trim().equals(ref.name.trim(), ignoreCase = true) }
+    }
+
+    private fun showCameraExternally(command: ExternalCommand.ShowCamera, current: AppState): Boolean {
+        val index = resolve(command.camera, current.cameras)
+        if (index < 0) return false
+        val target = Screen.Fullscreen(current.cameras[index].channel)
+        val duration = command.durationSec ?: 0
+        // Un affichage temporaire déjà en cours garde l'écran d'origine.
+        val previous = returnTarget ?: ReturnTarget(current.screen, current.focusedIndex)
+        cancelAutoReturn()
+        if (duration > 0 && previous.screen != target) {
+            returnTarget = previous
+            returnTimer = scope.launch {
+                delay(duration * 1000L)
+                returnTimer = null
+                returnTarget = null
+                restore(previous)
+            }
+        }
+        showFullscreen(index)
+        return true
+    }
+
+    /** Fin d'un affichage temporaire : retour à la grille ou à la caméra affichée avant. */
+    private fun restore(previous: ReturnTarget) {
+        val cameras = state.value.cameras
+        if (cameras.isEmpty()) return
+        val screen = previous.screen
+        if (screen is Screen.Fullscreen) {
+            val index = cameras.indexOfFirst { it.channel == screen.channel }
+            if (index >= 0) {
+                showFullscreen(index)
+                return
+            }
+        }
+        showGrid(previous.focusedIndex.coerceIn(0, cameras.lastIndex))
+    }
+
+    private fun cancelAutoReturn() {
+        returnTimer?.cancel()
+        returnTimer = null
+        returnTarget = null
+    }
+
+    /** Pilote une caméra motorisée, affichée ou non, sans changer d'écran. */
+    private fun ptzExternally(command: ExternalCommand.Ptz, current: AppState): Boolean {
+        val camera = current.cameras.getOrNull(resolve(command.camera, current.cameras)) ?: return false
+        if (!camera.ptz) return false
+        // Tout mouvement en cours sur cette caméra (télécommande ou commande externe) s'arrête d'abord.
+        if (movingCamera?.channel == camera.channel) stopMovement()
+        stopExternalMove(camera.channel)
+        when (val action = command.action) {
+            is PtzAction.Move -> {
+                val direction = action.direction
+                sendPtzOrder { it.ptzStart(camera, direction) }
+                val move = ExternalMove(camera, direction)
+                externalMoves[camera.channel] = move
+                move.stopTimer = scope.launch {
+                    delay(action.durationMs)
+                    if (externalMoves[camera.channel] === move) stopExternalMove(camera.channel)
+                }
+            }
+            is PtzAction.Preset -> sendPtzOrder { it.gotoPreset(camera, action.preset) }
+            PtzAction.Stop -> Unit
+        }
+        return true
+    }
+
+    private fun stopExternalMove(channel: Int) {
+        val move = externalMoves.remove(channel) ?: return
+        move.stopTimer?.cancel()
+        sendPtzOrder { it.ptzStop(move.camera, move.direction) }
+    }
+
+    private fun stopAllExternalMoves() {
+        externalMoves.keys.toList().forEach { stopExternalMove(it) }
+    }
+
+    /** Au lancement, que le NVR soit configuré ou non. */
+    private fun loadMqtt() {
+        val revision = mqttRevision
+        scope.launch {
+            val config = try {
+                settings.loadMqtt()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null // Configuration illisible : pilotage désactivé.
+            }
+            if (revision == mqttRevision) model.update { it.copy(mqtt = config) }
+        }
+    }
+
+    private class ExternalMove(val camera: Camera, val direction: PtzDirection) {
+        var stopTimer: Job? = null
+    }
+
+    private data class ReturnTarget(val screen: Screen, val focusedIndex: Int)
 
     private companion object {
         const val GENERIC_ERROR = "Connexion au NVR impossible"

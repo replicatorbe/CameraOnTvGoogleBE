@@ -1,6 +1,8 @@
 package be.cameratv.view
 
+import android.content.Intent
 import android.os.Bundle
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -9,26 +11,34 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import be.cameratv.controller.AppController
+import be.cameratv.controller.ExternalCommandParser
+import be.cameratv.controller.ExternalController
 import be.cameratv.controller.RemoteCommand
 import be.cameratv.controller.RemoteKeyMapper
 import be.cameratv.model.AppModel
 import be.cameratv.BuildConfig
 import be.cameratv.model.DataStoreSettingsRepository
+import be.cameratv.model.MqttConfig
 import be.cameratv.model.NvrConfig
 import be.cameratv.model.Screen
 import be.cameratv.model.driver.CameraDriverFactory
+import be.cameratv.model.bus.PahoMessageBus
 import be.cameratv.model.driver.dahua.DahuaCgiDriver
+import java.util.UUID
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
  * Racine de composition : assemble Modèle, Contrôleur et Vue (injection manuelle),
- * puis transmet les touches de la télécommande au contrôleur.
+ * puis transmet au contrôleur les touches de la télécommande et les liens profonds.
  */
 class MainActivity : ComponentActivity() {
 
     private lateinit var controller: AppController
+
+    /** Pilotage par la domotique (MQTT), actif uniquement au premier plan. */
+    private lateinit var externalController: ExternalController
 
     /**
      * Touches dont l'ACTION_DOWN a été consommé : on consomme aussi leur ACTION_UP
@@ -43,16 +53,35 @@ class MainActivity : ComponentActivity() {
         val settings = DataStoreSettingsRepository(applicationContext)
         val driverFactory = CameraDriverFactory { config -> DahuaCgiDriver(config) }
         controller = AppController(model, settings, driverFactory, lifecycleScope)
+        val bus = PahoMessageBus(clientId = "cameratv-" + stableDeviceId())
+        externalController = ExternalController(model, controller, bus, lifecycleScope)
+
         val debugConfig = debugConfigFromIntent()
         if (debugConfig != null) controller.submitSetup(debugConfig) else controller.start()
+        applyDebugMqttFromIntent()
+        // Recréation de l'activité : le lien profond a déjà été traité.
+        if (savedInstanceState == null) handleDeepLink(intent)
 
         keepScreenOnWhileWatching()
+        observeExitRequests()
 
         setContent {
             CameraTvTheme {
                 AppView(controller)
             }
         }
+    }
+
+    /** Lien profond reçu alors que l'application tourne déjà (launchMode singleTask). */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        externalController.start()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -88,6 +117,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         releasePressedKeys()
+        externalController.stop()
         super.onStop()
     }
 
@@ -125,9 +155,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** `cameratv://show?camera=3`, `cameratv://grid`, `cameratv://exit` : transmis au contrôleur. */
+    private fun handleDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        val command = ExternalCommandParser.fromUri(uri.toString()) ?: return
+        controller.onExternalCommand(command)
+    }
+
+    /** La domotique demande de quitter : on passe en arrière-plan sans fermer l'application. */
+    private fun observeExitRequests() {
+        lifecycleScope.launch {
+            controller.state
+                .map { it.exitRequested }
+                .distinctUntilChanged()
+                .collect { requested ->
+                    if (requested) {
+                        moveTaskToBack(true)
+                        controller.onExitHandled()
+                    }
+                }
+        }
+    }
+
+    /** Identifiant MQTT stable d'un appareil à l'autre ; aléatoire si Android ne le fournit pas. */
+    private fun stableDeviceId(): String =
+        Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            ?.takeIf { it.isNotBlank() }
+            ?: UUID.randomUUID().toString()
+
     /**
      * Build debug uniquement : configuration passée par adb, le clavier TV rendant la saisie pénible.
-     * adb shell am start -n be.cameratv/.view.MainActivity --es nvr_host IP --es nvr_user U --es nvr_password P
+     * adb shell am start -n be.cameratv/.view.MainActivity --es nvr_host IP --es nvr_user U --es nvr_password P \
+     *     --es mqtt_host BROKER --ei mqtt_port 1883 --es mqtt_base_topic cameratv
+     * Désactiver MQTT : --ez mqtt_disable true
      */
     private fun debugConfigFromIntent(): NvrConfig? {
         if (!BuildConfig.DEBUG) return null
@@ -136,6 +196,23 @@ class MainActivity : ComponentActivity() {
             host = host,
             username = intent.getStringExtra("nvr_user").orEmpty(),
             password = intent.getStringExtra("nvr_password").orEmpty(),
+        )
+    }
+
+    /** Build debug uniquement : configuration MQTT passée par adb (voir [debugConfigFromIntent]). */
+    private fun applyDebugMqttFromIntent() {
+        if (!BuildConfig.DEBUG) return
+        if (intent.getBooleanExtra("mqtt_disable", false)) {
+            controller.updateMqtt(null)
+            return
+        }
+        val host = intent.getStringExtra("mqtt_host") ?: return
+        controller.updateMqtt(
+            MqttConfig(
+                host = host,
+                port = intent.getIntExtra("mqtt_port", 1883),
+                baseTopic = intent.getStringExtra("mqtt_base_topic") ?: "cameratv",
+            )
         )
     }
 }

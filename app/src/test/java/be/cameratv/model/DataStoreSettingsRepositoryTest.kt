@@ -44,4 +44,47 @@ class DataStoreSettingsRepositoryTest {
         repository.clear()
         assertNull(repository.load())
     }
+
+    @Test
+    fun `MQTT vide au depart`() = runBlocking {
+        assertNull(repository.loadMqtt())
+    }
+
+    @Test
+    fun `MQTT sauvegarde, relecture et suppression`() = runBlocking {
+        val config = MqttConfig("192.168.1.10", port = 1884, baseTopic = "salon/tv", username = "jeedom", password = "s3cr:et")
+        repository.saveMqtt(config)
+        assertEquals(config, repository.loadMqtt())
+        repository.saveMqtt(null)
+        assertNull(repository.loadMqtt())
+    }
+
+    @Test
+    fun `MQTT valeurs par defaut`() = runBlocking {
+        repository.saveMqtt(MqttConfig("broker.local"))
+        assertEquals(MqttConfig("broker.local", 1883, "cameratv", "", ""), repository.loadMqtt())
+    }
+
+    @Test
+    fun `MQTT hote vide equivaut a absent`() = runBlocking {
+        repository.saveMqtt(MqttConfig("  "))
+        assertNull(repository.loadMqtt())
+    }
+
+    @Test
+    fun `MQTT independant de la configuration du NVR`() = runBlocking {
+        val nvr = NvrConfig("192.168.1.108", "admin", "pass")
+        val mqtt = MqttConfig("192.168.1.10")
+        repository.save(nvr)
+        repository.saveMqtt(mqtt)
+
+        repository.clear()
+        assertNull(repository.load())
+        assertEquals(mqtt, repository.loadMqtt())
+
+        repository.save(nvr)
+        repository.saveMqtt(null)
+        assertEquals(nvr, repository.load())
+        assertNull(repository.loadMqtt())
+    }
 }

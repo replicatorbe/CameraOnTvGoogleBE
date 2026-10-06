@@ -92,5 +92,5 @@ adb shell am start -n be.cameratv/.view.MainActivity \
 
 - [x] MVP 1 : grille, plein écran, navigation à la télécommande
 - [x] MVP 2 : PTZ (orientation, zoom, presets) à la télécommande
-- [ ] MVP 3 : pilotage externe via MQTT (Jeedom)
+- [x] MVP 3 : pilotage externe via MQTT (Jeedom), voir [docs/jeedom.md](docs/jeedom.md)
 - [ ] MVP 4 : événements du portier (appel → réveil de la TV, incrustation de l'image)
