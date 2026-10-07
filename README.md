@@ -2,6 +2,16 @@
 
 Application Android TV (Google TV) pour afficher et piloter à la télécommande les caméras de surveillance d'un NVR Dahua, sur le réseau local.
 
+## Captures d'écran
+
+Images fictives (NVR simulé), pour illustrer l'interface.
+
+| Grille | Plein écran |
+|---|---|
+| ![Grille de 8 caméras, la tuile sélectionnée est en direct](docs/screenshots/grid.jpg) | ![Caméra en plein écran avec le rappel des touches](docs/screenshots/fullscreen.jpg) |
+| **Mode PTZ** | **Configuration** |
+| ![Pilotage d'une caméra motorisée à la télécommande](docs/screenshots/ptz.jpg) | ![Écran de configuration du NVR et de MQTT](docs/screenshots/setup.jpg) |
+
 ## Fonctionnalités
 
 - Découverte automatique des caméras du NVR (noms des canaux).
